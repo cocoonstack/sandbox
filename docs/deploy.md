@@ -801,14 +801,18 @@ journals the new boot, and moves `restarts` and `restarted_at`. The remount
 runs as a volume change: it waits for a running `PUT` or `PATCH` of the
 claim's volumes, and a release cancels it. A release stops the host's calls
 but not a guest `mount` that has already started, the same limit a live
-`PATCH` has; the dirty marker of a writable volume then stays. A volume whose
+`PATCH` has; the dirty marker of a writable volume then stays unless the
+teardown confirms a clean unmount and the VM is removed. A volume whose
 remount fails turns `pending` with a remount error in
 [`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes),
 and a `PUT` of the same set retries the remount. Its hold and dirty marker
 stay, and a release does not unmount or clear it. An env write that fails does
 not skip the volumes. It records no usage event, since the VMM never exited, and
-spends no restart budget. A guest that cannot be restored logs an error and
-stays running; `restarts` still moves. The instance-metadata document is not
+spends no restart budget. A guest that does not answer the settle's probe
+moves nothing: the notice stays pending and the settle is tried again up to
+3 times, 30 s apart, then waits for the claim's next arm or notice. A guest
+that answers but whose env write or remount fails logs an error and stays
+running, and `restarts` still moves. The instance-metadata document is not
 restored, so re-send it when `restarts` moves.
 
 A claim settles at most once every 30 s: notices inside that gap become one
@@ -820,8 +824,8 @@ write fails, the ack still goes out and the notice is lost if sandboxd stops
 before its retry lands. A notice that reaches a claim mid-capture,
 hibernated, archived or failed, and a settle that has not run by a sandboxd
 restart or a move, run when the claim is served again: at adoption on the
-next start, on a wake, on a move-in, or when a failed capture leaves the
-guest running. A cold boot clears the pending notice, since it restores the
+next start, on a wake, when a move-in commits, or when a failed capture or
+an abandoned hibernate leaves the guest running. A cold boot clears the pending notice, since it restores the
 guest itself, and counts one restart. During a liveness cold boot, one
 finished at startup, or the wake of a failed claim, the old door still
 listens, and its notice only records the boot. A wake that cold-boots (from
