@@ -667,13 +667,29 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		})
 	}
 	for _, sb := range sbs {
-		if armErr := m.out.Arm(ctx, sb); armErr != nil {
+		armed, armErr := m.armIfRunning(ctx, sb)
+		if armErr != nil {
 			m.rollbackClaim(ctx, sbs, true)
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
-		m.disarmIfReleased(sb)
+		if armed {
+			m.disarmIfReleased(sb)
+		}
 	}
 	return nil
+}
+
+func (m *Manager) armIfRunning(ctx context.Context, sb *types.Sandbox) (bool, error) {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	m.mu.Lock()
+	running := m.claimed[sb.ID] == sb && runningShaped(sb)
+	m.mu.Unlock()
+	if !running {
+		m.out.ClosePrebound(sb.VMName)
+		return false, nil
+	}
+	return true, m.out.Arm(ctx, sb)
 }
 
 // rollbackClaim unwinds a claim batch: a NIC that cannot be locked is never handed out.
