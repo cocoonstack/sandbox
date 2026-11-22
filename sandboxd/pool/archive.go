@@ -356,13 +356,13 @@ func (m *Manager) commitWake(ctx context.Context, sb, built *types.Sandbox, cold
 		return ErrUnknownSandbox
 	}
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
-	restarts, restartedAt := sb.Restarts, sb.RestartedAt
+	restarts, restartedAt, rebootPending := sb.Restarts, sb.RestartedAt, sb.RebootPending
 	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = built.VsockSocket, "", 0, false
 	sb.ImageID = cmp.Or(built.ImageID, sb.ImageID)
 	m.setVMNameLocked(sb, built.VMName)
 	wokeAt := time.Now()
 	if coldBooted {
-		sb.Restarts, sb.RestartedAt = sb.Restarts+1, wokeAt
+		sb.Restarts, sb.RestartedAt, sb.RebootPending = sb.Restarts+1, wokeAt, false
 	}
 	sb.Deadline = wokeAt.Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
 	js, lease := m.store.set(sb), sb.Deadline
@@ -370,7 +370,7 @@ func (m *Manager) commitWake(ctx context.Context, sb, built *types.Sandbox, cold
 	if err := m.store.commit(js); err != nil {
 		rb, _ := m.setIfLive(sb, func() {
 			sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline, sb.ReaderSafe = "", ck, epoch, deadline, safe
-			sb.Restarts, sb.RestartedAt = restarts, restartedAt
+			sb.Restarts, sb.RestartedAt, sb.RebootPending = restarts, restartedAt, rebootPending
 			m.setVMNameLocked(sb, "")
 		})
 		m.store.recommit(ctx, rb)

@@ -435,6 +435,160 @@ func TestAPendingRebootSettlesAfterAMoveIn(t *testing.T) {
 	waitJournaledReboot(t, mc.t, sb.ID, 1, "boot-2")
 }
 
+func TestANoticeDuringACaptureWhoseWakeColdBootsCountsOneRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		queuedByColdArm := false
+		withOutbound(t, m, func(o *outbound.Options) {
+			armed := o.Armed
+			o.Armed = func(ctx context.Context, armedSB *types.Sandbox) {
+				armed(ctx, armedSB)
+				m.mu.Lock()
+				cold := armedSB.ColdBooting
+				m.mu.Unlock()
+				queuedByColdArm = queuedByColdArm || cold && rebootQueued(m, armedSB)
+			}
+		})
+		rebootInCapture(t, m, eng, sb)
+		eng.mu.Lock()
+		eng.probeFails = wakeRestoreTries
+		eng.mu.Unlock()
+
+		wakeForTest(t, m, sb)
+		time.Sleep(2 * rebootSettleGap)
+		synctest.Wait()
+
+		if row := journaled(t, m)[sb.ID]; row.Restarts != 1 || row.RebootPending {
+			t.Errorf("journal %+v, want the cold boot counted once and the notice it covered cleared", row)
+		}
+		if queuedByColdArm {
+			t.Error("the cold boot's arm queued a reboot settle")
+		}
+	})
+}
+
+func TestASettleQueuedBeforeAColdBootDoesNothingAfterIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		m.Rebooted(t.Context(), sb, "boot-1")
+		synctest.Wait()
+		m.Rebooted(t.Context(), sb, "boot-2")
+		killVMM(eng, sb.VMName)
+		runLiveness(t, m)
+		if got := restartsOf(m, sb.ID); got != 2 {
+			t.Fatalf("restarts %d after the settle and the cold boot, want 2", got)
+		}
+
+		time.Sleep(2 * rebootSettleGap)
+		synctest.Wait()
+
+		if got := restartsOf(m, sb.ID); got != 2 {
+			t.Errorf("restarts %d, want the settle queued before the cold boot to do nothing", got)
+		}
+	})
+}
+
+func TestANoticeDuringACaptureWhoseArchivedWakeColdBootsCountsOneRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, archivePool(keepAnHour))
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour})
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		rebootInCapture(t, m, eng, sb)
+		if err := m.archive(t.Context(), sb); err != nil {
+			t.Fatalf("archive: %v", err)
+		}
+		eng.mu.Lock()
+		eng.probeFails = wakeRestoreTries
+		eng.mu.Unlock()
+
+		wakeForTest(t, m, sb)
+		time.Sleep(2 * rebootSettleGap)
+		synctest.Wait()
+
+		if row := journaled(t, m)[sb.ID]; row.Restarts != 1 || row.RebootPending {
+			t.Errorf("journal %+v, want the cold-booted clone counted once and the notice it covered cleared", row)
+		}
+	})
+}
+
+func TestARebootLeavesADetachingVolumeToItsDetachRetry(t *testing.T) {
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	eng.mu.Lock()
+	eng.detachVolumeErr = errors.New("device busy")
+	eng.mu.Unlock()
+	if _, err := m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Remove: []string{"data"}}); err == nil {
+		t.Fatal("the detach succeeded, want it to fail and leave the volume detaching")
+	}
+	held := volumeHoldersOf(m, "data")
+	eng.mu.Lock()
+	eng.liveMountErrFor = "data"
+	eng.mu.Unlock()
+
+	m.Rebooted(t.Context(), sb, "boot-2")
+	waitJournaledReboot(t, m, sb.ID, 1, "boot-2")
+
+	eng.mu.Lock()
+	calls := slices.Clone(eng.liveMountCalls)
+	eng.mu.Unlock()
+	if len(calls) != 0 {
+		t.Errorf("remount dispatches %v, want the detaching volume left alone", calls)
+	}
+	if got := volumeHoldersOf(m, "data"); got != held || held == (volumeHolders{}) {
+		t.Errorf("holders %+v, want the detaching volume's hold %+v kept", got, held)
+	}
+	if st := volumeStates(t, m, sb.ID)["data"]; st.State != types.VolumeDetaching {
+		t.Errorf("state %+v, want the volume still detaching", st)
+	}
+	if row := journaled(t, m)[sb.ID]; len(row.Volumes) != 1 {
+		t.Errorf("journal volumes %v, want the attached disk still applied", row.Volumes)
+	}
+}
+
+func TestAFailedRemountKeepsTheMountConflictItHit(t *testing.T) {
+	eng := newFakeEngine()
+	eng.liveMountErrFor = "data"
+	eng.liveMountErr = &engine.VolumeMountConflict{Message: "volume device has another mount at \"/elsewhere\""}
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	m.Rebooted(t.Context(), sb, "boot-2")
+	waitJournaledReboot(t, m, sb.ID, 1, "boot-2")
+
+	if st := volumeStates(t, m, sb.ID)["data"]; st.Error != eng.liveMountErr.Error() {
+		t.Errorf("state %+v, want the mount conflict's text", st)
+	}
+}
+
+func TestOnlyANoticeThatMakesAClaimPendingWritesTheJournal(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	m.Rebooted(t.Context(), sb, "boot-2")
+	breakStore(t, m)
+
+	m.Rebooted(t.Context(), sb, "boot-3")
+
+	if m.store.recommitting.Load() {
+		t.Error("a notice for a claim already pending wrote the journal")
+	}
+	healStore(t, m)
+}
+
 func TestARebootSettleWaitsForAVolumeChangeAndRemountsTheSetItApplied(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -454,7 +608,8 @@ func TestARebootSettleWaitsForAVolumeChangeAndRemountsTheSetItApplied(t *testing
 			t.Fatalf("live mounts %v while a volume change runs, want the settle to wait", got)
 		}
 		m.mu.Lock()
-		sb.Volumes = append(slices.Clone(sb.Volumes), types.Volume{Name: "other", Mount: "/volumes/other"})
+		other := types.Volume{Name: "other", Mount: "/volumes/other"}
+		sb.Volumes, sb.VolumesWant = append(slices.Clone(sb.Volumes), other), append(slices.Clone(sb.VolumesWant), other)
 		m.mu.Unlock()
 		m.finishVolumeRun(sb, run)
 		synctest.Wait()

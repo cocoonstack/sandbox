@@ -405,11 +405,11 @@ func (m *Manager) recordVolumeError(sb *types.Sandbox, run *volumeRun, name stri
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			message = volumeChangeInterrupted
 		}
-		if conflict, ok := errors.AsType[*engine.VolumeMountConflict](err); ok {
-			message = conflict.Error()
-		}
 		if errors.Is(err, errRemountFailed) {
 			message = volumeRemountFailed
+		}
+		if conflict, ok := errors.AsType[*engine.VolumeMountConflict](err); ok {
+			message = conflict.Error()
 		}
 		if errs == nil {
 			errs = map[string]string{}

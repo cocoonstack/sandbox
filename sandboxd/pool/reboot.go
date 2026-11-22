@@ -20,24 +20,32 @@ type rebootGate struct {
 }
 
 func (m *Manager) Rebooted(ctx context.Context, sb *types.Sandbox, bootID string) {
+	var (
+		js       claimSnapshot
+		accepted bool
+		journal  bool
+	)
 	m.mu.Lock()
-	var js claimSnapshot
-	pending := false
 	switch {
 	case m.claimed[sb.ID] != sb || bootID == sb.BootID:
 	case sb.ColdBooting:
 		sb.BootID = bootID
 	default:
-		sb.BootID, sb.RebootPending, pending = bootID, true, true
-		js = m.store.set(sb)
+		accepted, journal = true, !sb.RebootPending
+		sb.BootID, sb.RebootPending = bootID, true
+		if journal {
+			js = m.store.set(sb)
+		}
 		if runningShaped(sb) {
 			m.queueRebootLocked(ctx, sb)
 		}
 	}
 	m.mu.Unlock()
 	logger := log.WithFunc("pool.Rebooted")
-	if !pending {
+	if !accepted {
 		logger.Debugf(ctx, "no reboot settle for the boot notice %s of %s", bootID, sb.ID)
+	}
+	if !journal {
 		return
 	}
 	if err := m.store.commit(js); err != nil {
@@ -49,7 +57,7 @@ func (m *Manager) Rebooted(ctx context.Context, sb *types.Sandbox, bootID string
 func (m *Manager) rebootArmed(ctx context.Context, sb *types.Sandbox) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if sb.RebootPending && m.claimed[sb.ID] == sb {
+	if sb.RebootPending && !sb.ColdBooting && m.claimed[sb.ID] == sb {
 		m.queueRebootLocked(ctx, sb)
 	}
 }
@@ -73,7 +81,7 @@ func (m *Manager) settleReboot(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	live := m.ownsRunLocked(sb, run) && runningShaped(sb) && !sb.ColdBooting
+	live := m.ownsRunLocked(sb, run) && runningShaped(sb) && !sb.ColdBooting && sb.RebootPending
 	if live {
 		m.reboots[sb] = rebootGate{next: time.Now().Add(rebootSettleGap)}
 	} else {
@@ -102,7 +110,9 @@ func (m *Manager) settleReboot(ctx context.Context, sb *types.Sandbox) {
 func (m *Manager) restoreRebootedGuest(ctx context.Context, sb *types.Sandbox, run *volumeRun) (int, error) {
 	m.mu.Lock()
 	env, sock := sb.Env, sb.VsockSocket
-	mounts := slices.DeleteFunc(slices.Clone(sb.Volumes), func(v types.Volume) bool { return v.AttachOnly })
+	mounts := slices.DeleteFunc(slices.Clone(sb.Volumes), func(v types.Volume) bool {
+		return v.AttachOnly || volumeIndex(sb.VolumesWant, v.Name) < 0
+	})
 	m.mu.Unlock()
 	if err := m.eng.Probe(ctx, sock, claimProbeTimeout); err != nil {
 		return 0, err
@@ -120,7 +130,8 @@ func (m *Manager) restoreRebootedGuest(ctx context.Context, sb *types.Sandbox, r
 		err := m.eng.MountLiveVolume(ctx, sock, v.Name, v.Mount, v.RW())
 		if err != nil {
 			m.recordVolumeError(sb, run, v.Name, fmt.Errorf("%w: %w", errRemountFailed, err))
-			errs = append(errs, fmt.Errorf("mount volume %q: %w", v.Name, err), m.commitVolumeApplied(ctx, sb, run, v, false))
+			dropErr := m.commitVolumeApplied(ctx, sb, run, v, false)
+			errs = append(errs, fmt.Errorf("mount volume %q: %w", v.Name, err), dropErr)
 			continue
 		}
 		m.clearVolumeError(sb, run, v.Name)
