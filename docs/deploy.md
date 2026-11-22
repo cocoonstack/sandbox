@@ -802,10 +802,10 @@ runs as a volume change: it waits for a running `PUT` or `PATCH` of the
 claim's volumes, and a release cancels it. A release stops the host's calls
 but not a guest `mount` that has already started, the same limit a live
 `PATCH` has; the dirty marker of a writable volume then stays. A volume whose
-remount fails turns pending with its error in
-[`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes),
-and a `PUT` of the same set mounts it again. An env write that fails does not
-skip the volumes. It records no usage event, since the VMM never exited, and
+remount fails shows a remount error in
+[`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes);
+a `PATCH` that removes it and one that adds it again mount it, as does the
+next reboot's remount. An env write that fails does not skip the volumes. It records no usage event, since the VMM never exited, and
 spends no restart budget. A guest that cannot be restored logs an error and
 stays running; `restarts` still moves. The instance-metadata document is not
 restored, so re-send it when `restarts` moves.
@@ -817,8 +817,9 @@ settle commits. A notice that reaches a claim mid-capture, hibernated,
 archived or failed, and a settle that has not run by a sandboxd restart or a
 move, run when the claim is served again: at adoption on the next start, on a
 wake, on a move-in, or when a failed capture leaves the guest running. During
-a liveness or startup cold boot the old door still listens, and its notice
-only records the boot, since that boot restores the guest itself. A wake that
+a liveness cold boot, one finished at startup, or the wake of a failed claim,
+the old door still listens, and its notice only records the boot, since that
+boot restores the guest itself. A wake that
 cold-boots (from hibernation or the archive) has no door listening yet, so
 the VMM refuses its notice. A notice for a released claim is dropped. Guest
 root can dial the door, so a forged notice costs only its own claim one

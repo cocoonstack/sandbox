@@ -407,7 +407,8 @@ when the volume is in both sets, `pending` when desired but not yet confirmed,
 or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
 PUT or PATCH adds a top-level `error` naming the refusal, and the affected
-state may carry its own `error`. `converging` is true only while a request worker is running.
+state may carry its own `error`. `converging` is true while a request worker
+or the remount after a [guest reboot](deploy.md#guest-reboots) is running.
 `pending` with `converging: false` requires an explicit retry; there is no
 background convergence. GET retains the last safe per-volume error for the
 current daemon lifetime. After daemon restart, unfinished states report an
@@ -483,7 +484,11 @@ Attach-only writers have no automatic dirty-marker protection. The caller owns
 mounting, flushing, unmounting, recovery, and fencing before reuse.
 
 After a [reboot inside the guest](deploy.md#guest-reboots) sandboxd mounts each
-mounted volume again; an attach-only one stays the caller's. A guest service
+mounted volume again; an attach-only one stays the caller's. A remount that
+fails leaves the volume `attached` with the error `remount after a guest reboot
+failed; PATCH the volume out and back in, or reboot the guest again`: a PATCH
+that removes it and one that adds it again mount it, and so does the remount
+after the next reboot. A PUT of the same set changes nothing. A guest service
 that writes into a mount path between its own start and that remount writes to
 the root disk, and the mount then hides what it wrote.
 
