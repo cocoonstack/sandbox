@@ -223,7 +223,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		}
 		unmountCtx, cancel := context.WithTimeout(ctx, volumeMutationTimeout)
 		clean, err := m.eng.UnmountVolume(unmountCtx, sb.VsockSocket, volume.Mount)
-		wedged := unmountCtx.Err() != nil
+		wedged := unmountCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded)
 		cancel()
 		if err != nil {
 			logger.Errorf(ctx, err, "unmount volume %s of %s", volume.Name, sb.ID)
@@ -233,7 +233,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 			}
 			continue
 		}
-		if entry, ok := catalog[volume.Name]; ok && clean {
+		if entry, ok := catalog[volume.Name]; ok && clean && volumeIndex(sb.Volumes, volume.Name) >= 0 {
 			td.clears = append(td.clears, entry.disk.Path)
 		}
 	}

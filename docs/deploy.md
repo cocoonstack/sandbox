@@ -806,9 +806,10 @@ teardown confirms a clean unmount and the VM is removed. A volume whose
 remount fails turns `pending` with a remount error in
 [`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes),
 and a `PUT` of the same set retries the remount. Its hold and dirty marker
-stay. A release unmounts a pending volume the guest did mount, by its path,
-after the mounted ones, and clears its marker only on that clean unmount; one
-the guest never mounted keeps its marker. An env write that fails does
+stay. A release unmounts whatever is mounted at a pending volume's path, after
+the mounted volumes, so its writes are flushed, and always keeps its marker:
+a mount at that path does not prove it is the volume's device. An env write
+that fails does
 not skip the volumes. It records no usage event, since the VMM never exited, and
 spends no restart budget. A guest that does not answer the settle's probe
 moves nothing: the notice stays pending and the settle is tried again up to
