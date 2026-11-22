@@ -208,7 +208,8 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 // quiesceVolumes unmounts a claim's writable mounts in reverse; an unclean unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: heldVolumes(sb)}
-	if !slices.ContainsFunc(sb.Volumes, needsUnmount) {
+	unmounts := slices.Concat(volumeDifference(sb.VolumesWant, sb.Volumes), sb.Volumes)
+	if !slices.ContainsFunc(unmounts, needsUnmount) {
 		return td
 	}
 	catalog := m.catalogSnapshot()
@@ -216,13 +217,13 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	// Cancellation-immune like removal: a caller hanging up must not skip the flush.
 	ctx = context.WithoutCancel(ctx)
 	stuck := false
-	for _, volume := range slices.Backward(sb.Volumes) {
+	for _, volume := range slices.Backward(unmounts) {
 		if !needsUnmount(volume) {
 			continue
 		}
 		unmountCtx, cancel := context.WithTimeout(ctx, volumeMutationTimeout)
 		clean, err := m.eng.UnmountVolume(unmountCtx, sb.VsockSocket, volume.Mount)
-		wedged := unmountCtx.Err() != nil
+		wedged := unmountCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded)
 		cancel()
 		if err != nil {
 			logger.Errorf(ctx, err, "unmount volume %s of %s", volume.Name, sb.ID)
@@ -232,7 +233,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 			}
 			continue
 		}
-		if entry, ok := catalog[volume.Name]; ok && clean {
+		if entry, ok := catalog[volume.Name]; ok && clean && volumeIndex(sb.Volumes, volume.Name) >= 0 {
 			td.clears = append(td.clears, entry.disk.Path)
 		}
 	}

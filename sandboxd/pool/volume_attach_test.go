@@ -344,6 +344,41 @@ func TestQuiesceVolumesSkipsAttachOnlyEntries(t *testing.T) {
 	}
 }
 
+func TestQuiesceVolumesUnmountsAPendingVolumeAndKeepsItsMarker(t *testing.T) {
+	applied := writeVolumeImage(t, "applied.img", "applied")
+	landed := writeVolumeImage(t, "landed.img", "landed")
+	absent := writeVolumeImage(t, "absent.img", "absent")
+	eng := newFakeEngine()
+	eng.vms["sbx-pending"] = "/vsock/pending"
+	m := newVolumeManager(t, eng, []config.VolumeSpec{
+		{Name: "applied", Path: applied, Writable: true},
+		{Name: "landed", Path: landed, Writable: true},
+		{Name: "absent", Path: absent, Writable: true},
+	})
+	want := []types.Volume{
+		{Name: "applied", Mount: "/volumes/applied", Mode: types.VolumeModeRW},
+		{Name: "landed", Mount: "/volumes/landed", Mode: types.VolumeModeRW},
+		{Name: "absent", Mount: "/volumes/absent", Mode: types.VolumeModeRW},
+	}
+	sb := &types.Sandbox{
+		ID: "sb_pending", VMName: "sbx-pending", Key: testKey, VsockSocket: "/vsock/pending",
+		Volumes: want[:1], VolumesWant: want,
+	}
+	eng.volumeMounts = want[:2]
+
+	td := m.quiesceVolumes(t.Context(), sb)
+
+	if ops := []string{"umount:/volumes/applied", "umount:/volumes/absent", "umount:/volumes/landed"}; !slices.Equal(eng.volumeOpsLog(), ops) {
+		t.Errorf("quiesce ops=%v, want the applied volume first, then each pending one: %v", eng.volumeOpsLog(), ops)
+	}
+	if !slices.Equal(td.clears, []string{applied}) {
+		t.Errorf("marker clears=%v, want only the applied %s: a mount at a pending volume's path proves nothing about its device", td.clears, applied)
+	}
+	if got := eng.syncCount(); got != 0 {
+		t.Errorf("guest syncs=%d, want none: a pending volume the guest never mounted is not a failed unmount", got)
+	}
+}
+
 func soleVM(eng *fakeEngine, except ...string) (name string, count int) {
 	eng.mu.Lock()
 	defer eng.mu.Unlock()

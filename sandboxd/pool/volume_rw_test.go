@@ -494,6 +494,27 @@ func TestReleaseSkipsTheRemainingUnmountsOfAWedgedGuest(t *testing.T) {
 	})
 }
 
+func TestReleaseSkipsTheRemainingUnmountsWhenTheGuestDialTimesOut(t *testing.T) {
+	m, eng, sb, paths := claimTwoWritableVolumes(t)
+	eng.unmountVolumeErr = context.DeadlineExceeded
+
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	if got := eng.unmountCount(); got != 1 {
+		t.Errorf("unmount calls %d, want 1: a dial that times out inside the budget is a wedged guest too", got)
+	}
+	if got := eng.syncCount(); got != 1 {
+		t.Errorf("guest syncs %d, want the fallback once", got)
+	}
+	for _, path := range paths {
+		if !volumeDirty(path) {
+			t.Errorf("marker of %s cleared without a clean unmount", path)
+		}
+	}
+}
+
 func TestReleaseGivesASlowFlushItsOwnMutationBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, base, sb, _ := claimTwoWritableVolumes(t)
