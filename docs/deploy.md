@@ -747,8 +747,12 @@ cannot connect to the guest's silkd, when an exec cannot write its request,
 when a port forward or a preview ends, by its deadline or because its caller
 left, before silkd answers it, when an exec ends the same way before silkd has
 started the command, and when an agent relay's caller hangs up before silkd has
-sent a byte on that connection. A port that nothing in the guest listens on, or
-a stream silkd closes or answers with an error, is not a note. About 2 minutes
+sent a byte on that connection. An agent relay whose upload silkd has stopped
+reading is not a note: sandboxd is blocked writing to the guest and does not
+see its caller leave, so that relay stays open until the VMM stops or the
+claim is released, and a later call on a new connection is what notes the
+claim. A port that nothing in the guest listens on, or a stream silkd closes or
+answers with an error, is not a note. About 2 minutes
 later the next pass probes the guest for up to 60 s, then once more for up to
 15 s under the claim's lock. A guest that answers either probe is left alone. One that
 answers neither, while cocoon still lists its VMM as running, has the VMM
@@ -806,12 +810,12 @@ teardown confirms a clean unmount and the VM is removed. A volume whose
 remount fails turns `pending` with a remount error in
 [`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes),
 and a `PUT` of the same set retries the remount. Its hold and dirty marker
-stay. A release unmounts whatever is mounted at a pending volume's path, after
-the mounted volumes, so its writes are flushed, and always keeps its marker:
-a mount at that path does not prove it is the volume's device. An env write
-that fails does
-not skip the volumes. It records no usage event, since the VMM never exited, and
-spends no restart budget. A guest that does not answer the settle's probe
+stay. A release unmounts whatever is mounted at a pending writable volume's
+path, after the mounted volumes, so its writes are flushed, and always keeps
+its marker: a mount at that path does not prove it is the volume's device. An
+env write that fails does not skip the volumes. It records no usage event,
+since the VMM never exited, and spends no restart budget. A guest that does
+not answer the settle's probe
 moves nothing: the notice stays pending and the settle is tried again up to
 3 times, 30 s apart, then waits for the claim's next arm or notice. After the
 retries are used up, an arm gets one more try while the same sandboxd keeps

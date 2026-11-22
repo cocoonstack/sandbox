@@ -478,8 +478,9 @@ it is. These checks read silkd's own mount namespace, so a mount of the device
 in another namespace, or one moved there, is not seen. Live removal also needs
 a confirmed host detach. A missing device or pre-unmounted filesystem does not
 prove clean unmount. The marker remains on uncertainty and blocks subsequent
-readers. Release waits up to 30 seconds for each writable volume's unmount, and
-a guest that does not answer within that keeps every remaining marker.
+readers. Release waits up to 30 seconds for each writable volume's unmount. A
+guest that does not answer within that, or does not take the connection within
+10 seconds, ends the unmounts and keeps every remaining marker.
 Attach-only writers have no automatic dirty-marker protection. The caller owns
 mounting, flushing, unmounting, recovery, and fencing before reuse.
 
@@ -1512,7 +1513,10 @@ the connection is a byte-for-byte relay to the guest's silkd, carrying RPCs
 back to back (see [silkd](silkd.md)). An open relay holds the sandbox's idle
 clock, so a client that keeps a connection warm must close it when idle for
 `idle_hibernate_seconds` to apply. A relay whose client vanished without a FIN
-ends after about two minutes of failed TCP keepalives. Frames sent right behind the request,
+ends after about two minutes of failed TCP keepalives, except one whose upload
+silkd has stopped reading, which stays open until the VMM stops or the claim is
+released (see [silent guests](deploy.md#dead-vmms-and-host-restarts)). Frames
+sent right behind the request,
 before the 101, reach silkd in order; the Go and Python SDKs send their first
 frames that way over plain HTTP, so a proxy in front of a plain-HTTP endpoint
 must forward them too (Go's `httputil.ReverseProxy` drops them; Caddy forwards

@@ -131,8 +131,11 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   `<data_dir>/tun-freed.log` so its reuse window outlives a restart. A node
   with a `mesh` must have `meta_store.cell` and allocates it in the cell's
   [table](deploy.md#shared-tun-address-table) with one round trip per 1024
-  candidates, at most 64, and stays off (proxy mode only) while the meta store
-  is unreachable. A freed address is reused after
+  candidates, at most 64. A subnet of up to 65,536 hosts that this walk finds
+  full is then swept once in address order, with a retry when another claim
+  takes the address first, before it is reported full. The node stays off
+  (proxy mode only) while the meta store is unreachable. A freed address is
+  reused after
   `tun.reuse_after_seconds`, so the subnet's size over that window bounds the
   sustained claim rate: a `/8` with the 5-day default carries about 38 new tun
   claims a second across the cell. The claim's MAC is `02:00:` followed by the
@@ -176,7 +179,8 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   whose guest stops reading for 10 seconds is closed, freeing its queue. Until
   then the queue holds up to 1024 frames in 64 KiB buffers, so a stalled guest
   can hold about 72 MiB of inbound buffers per claim once the allocator rounds
-  each buffer up.
+  each buffer up. If every guest of a node stalls under inbound traffic at
+  once, that is about 18 GiB at 256 tun claims for those 10 seconds.
 - **Enforcement**: the packet port answers `ON` only for an armed,
   tun-enabled claim; disabling a claim ends its stream, drops its flows and
   stops its ARP answers. A guest of a `tun` pool that wakes, moves or reloads
