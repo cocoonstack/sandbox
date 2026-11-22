@@ -62,15 +62,8 @@ func (d *doors) listen() error {
 		if ln == nil {
 			continue
 		}
-		rc, err := ln.(syscall.Conn).SyscallConn()
-		if err != nil {
+		if err := listenBound(ln); err != nil {
 			return err
-		}
-		if ctlErr := rc.Control(func(fd uintptr) { err = syscall.Listen(int(fd), doorBacklog) }); ctlErr != nil {
-			return ctlErr
-		}
-		if err != nil {
-			return os.NewSyscallError("listen", err)
 		}
 	}
 	return nil
@@ -153,6 +146,20 @@ func bindDoors(vsock string, p egress.PolicyEvaluator, bind unixBinder) (*doors,
 		*door.ln = limitDoor(ln)
 	}
 	return d, nil
+}
+
+func listenBound(ln net.Listener) error {
+	rc, err := ln.(syscall.Conn).SyscallConn()
+	if err != nil {
+		return err
+	}
+	if ctlErr := rc.Control(func(fd uintptr) { err = syscall.Listen(int(fd), doorBacklog) }); ctlErr != nil {
+		return ctlErr
+	}
+	if err != nil {
+		return os.NewSyscallError("listen", err)
+	}
+	return nil
 }
 
 // listenUnix binds path after clearing a stale socket from a prior life that would block the bind.

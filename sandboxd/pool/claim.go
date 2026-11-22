@@ -577,6 +577,7 @@ func (m *Manager) addClaimLocked(sb *types.Sandbox) {
 
 func (m *Manager) dropClaimLocked(sb *types.Sandbox) {
 	delete(m.claimed, sb.ID)
+	delete(m.reboots, sb)
 	if m.claimedVMs[sb.VMName] == sb {
 		delete(m.claimedVMs, sb.VMName)
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 	"net/netip"
 	"os"
 	"slices"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -57,6 +59,7 @@ type Options struct {
 	// EgressLimit reads the claim's bandwidth cap under the owner's lock.
 	EgressLimit func(sb *types.Sandbox) types.EgressLimit
 	Fenced      func() bool
+	Rebooted    func(ctx context.Context, sb *types.Sandbox, bootID string)
 	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
 	Dial        egress.DialFunc
 	Verdict     VerdictFunc
@@ -76,6 +79,8 @@ type Host struct {
 	mu       sync.Mutex
 	doors    map[string]*doors
 	prebound map[string]*doors
+	boots    map[string]*net.UnixListener
+	preboots map[string]*net.UnixListener
 	taps     map[string]string
 
 	// limitMu orders each read of a claim's cap with its apply, so an older read never lands last.
@@ -83,7 +88,10 @@ type Host struct {
 }
 
 func New(o Options) *Host {
-	h := &Host{o: o, doors: map[string]*doors{}, prebound: map[string]*doors{}, taps: map[string]string{}}
+	h := &Host{
+		o: o, doors: map[string]*doors{}, prebound: map[string]*doors{}, taps: map[string]string{},
+		boots: map[string]*net.UnixListener{}, preboots: map[string]*net.UnixListener{},
+	}
 	h.RefreshSelf()
 	if h.o.Lock == nil {
 		h.o.Lock = netfilter.Lock
@@ -114,8 +122,9 @@ func (h *Host) Arm(ctx context.Context, sb *types.Sandbox) error {
 	return h.ArmProxy(ctx, sb)
 }
 
-// ArmProxy serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
+// ArmProxy opens the boot door, then serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
 func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
+	h.armBoot(ctx, sb)
 	h.mu.Lock()
 	d, displaced := h.prebound[sb.VMName], h.doors[sb.ID]
 	delete(h.prebound, sb.VMName)
@@ -190,14 +199,24 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 
 // Prebind binds a warm VM's doors at refill, so a claim only has to start serving them.
 func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
-	v := h.o.View()
-	policy := v.poolEgress[sb.Key]
-	if policy == nil || sb.VsockSocket == "" {
+	if sb.VsockSocket == "" {
+		return
+	}
+	logger := log.WithFunc("outbound.Prebind")
+	if boot, err := bindUnix(engine.BootSocketPath(sb.VsockSocket)); err != nil {
+		logger.Warnf(ctx, "pre-bind the boot door of %s: %v; the claim binds it instead", sb.VMName, err)
+	} else {
+		h.mu.Lock()
+		h.preboots[sb.VMName] = boot
+		h.mu.Unlock()
+	}
+	policy := h.o.View().poolEgress[sb.Key]
+	if policy == nil {
 		return
 	}
 	d, err := bindDoors(sb.VsockSocket, *policy, bindUnix)
 	if err != nil {
-		log.WithFunc("outbound.Prebind").Warnf(ctx, "pre-bind %s: %v; the claim binds instead", sb.VMName, err)
+		logger.Warnf(ctx, "pre-bind %s: %v; the claim binds instead", sb.VMName, err)
 		return
 	}
 	h.mu.Lock()
@@ -208,19 +227,22 @@ func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
 // ClosePrebound drops the doors bound for a warm VM that is going away or will not be served.
 func (h *Host) ClosePrebound(name string) {
 	h.mu.Lock()
-	d := h.prebound[name]
+	d, boot := h.prebound[name], h.preboots[name]
 	delete(h.prebound, name)
+	delete(h.preboots, name)
 	h.mu.Unlock()
 	if d != nil {
 		d.close()
 	}
+	closeBoot(boot)
 }
 
 // Disarm tears down a sandbox's doors, and its NIC lock only when the VM is removed.
 func (h *Host) Disarm(id string, removed bool) {
 	h.mu.Lock()
-	d := h.doors[id]
+	d, boot := h.doors[id], h.boots[id]
 	delete(h.doors, id)
+	delete(h.boots, id)
 	var tap string
 	if removed {
 		tap = h.taps[id]
@@ -228,6 +250,7 @@ func (h *Host) Disarm(id string, removed bool) {
 	}
 	t := d.takeTun()
 	h.mu.Unlock()
+	closeBoot(boot)
 	if d != nil {
 		d.close()
 		h.dropTun(t)
