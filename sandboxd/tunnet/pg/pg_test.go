@@ -224,8 +224,11 @@ func TestAWalkThatLosesARaceOnASlash16StillSweeps(t *testing.T) {
 	s := openSubnet(t, metastoretest.PGSchema(t), "c1", "240.0.0.0/16", time.Hour)
 	hold(t, s, 65533)
 	first, last := tunnet.HostAt(s.subnet, 1), tunnet.HostAt(s.subnet, 0)
-	if _, err := s.pool.Exec(ctx, `DELETE FROM sandboxd_tun_addrs WHERE address = $1`, first.String()); err != nil {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM sandboxd_tun_addrs WHERE cell = $1 AND address = $2`, s.cell, first.String()); err != nil {
 		t.Fatalf("free the first candidate: %v", err)
+	}
+	if _, err := s.pool.Exec(ctx, `ALTER SEQUENCE sandboxd_tun_addrs_cursor INCREMENT BY 2 RESTART WITH 1`); err != nil {
+		t.Fatalf("keep the walk off even offsets: %v", err)
 	}
 	racer, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -239,13 +242,14 @@ func TestAWalkThatLosesARaceOnASlash16StillSweeps(t *testing.T) {
 	if _, err = racer.Exec(ctx, `INSERT INTO sandboxd_tun_addrs (cell, address, claim) VALUES ($1, $2, 'racer')`, s.cell, first.String()); err != nil {
 		t.Fatalf("race: %v", err)
 	}
-	done := make(chan netip.Addr, 1)
+	type result struct {
+		addr netip.Addr
+		err  error
+	}
+	done := make(chan result, 1)
 	go func() {
 		addr, aerr := s.Assign(ctx, "sb_last")
-		if aerr != nil {
-			t.Errorf("assign after the walk lost %s: %v", first, aerr)
-		}
-		done <- addr
+		done <- result{addr, aerr}
 	}()
 	blocked := false
 	for range 100 {
@@ -260,8 +264,8 @@ func TestAWalkThatLosesARaceOnASlash16StillSweeps(t *testing.T) {
 	if err = racer.Commit(ctx); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	if got := <-done; got != last {
-		t.Errorf("assign after the walk lost %s = %s, want %s", first, got, last)
+	if got := <-done; got.err != nil || got.addr != last {
+		t.Errorf("assign after the walk lost %s = %s %v, want %s", first, got.addr, got.err, last)
 	}
 }
 
