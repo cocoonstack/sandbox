@@ -70,6 +70,31 @@ pub fn signal_group(pgid: u32, sig: i32) {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub fn pidfd_open(pid: u32) -> Option<OwnedFd> {
+    let pid = libc::pid_t::try_from(pid).ok().filter(|&p| p > 0)?;
+    // SAFETY: pidfd_open(2) takes no pointers.
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    let raw = RawFd::try_from(raw).ok().filter(|&fd| fd >= 0)?;
+    // SAFETY: raw is the fresh fd pidfd_open(2) just returned, owned by nothing else.
+    Some(unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn pidfd_open(_pid: u32) -> Option<OwnedFd> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+pub fn signal_pidfd_group(pidfd: &OwnedFd, pgid: u32, sig: i32) {
+    let group = pidfd_send_signal(pidfd.as_fd(), sig, libc::PIDFD_SIGNAL_PROCESS_GROUP);
+    if group.is_err_and(|e| e.raw_os_error() == Some(libc::EINVAL))
+        && pidfd_send_signal(pidfd.as_fd(), 0, 0).is_ok()
+    {
+        signal_group(pgid, sig);
+    }
+}
+
 pub fn hang_up_session(sid: u32) {
     let Ok(procs) = std::fs::read_dir("/proc") else {
         return;
@@ -625,6 +650,24 @@ fn inet_sockaddr(addr: Ipv4Addr) -> libc::sockaddr {
 #[cfg(target_os = "linux")]
 fn prefix_mask(prefix: u8) -> Ipv4Addr {
     Ipv4Addr::from(u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0))
+}
+
+#[cfg(target_os = "linux")]
+fn pidfd_send_signal(pidfd: BorrowedFd<'_>, sig: i32, flags: libc::c_uint) -> std::io::Result<()> {
+    // SAFETY: a null siginfo makes the kernel build the default one, so no pointer is read.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd.as_raw_fd(),
+            sig,
+            std::ptr::null::<libc::siginfo_t>(),
+            flags,
+        )
+    };
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]

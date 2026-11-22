@@ -35,6 +35,7 @@ impl Table {
             argv,
             detached,
             started_at_epoch_secs: now,
+            pidfd: sysutil::pidfd_open(pid),
             tx: OnceLock::new(),
             ring: Mutex::new(Ring {
                 buf: VecDeque::new(),
@@ -92,6 +93,7 @@ pub struct Proc {
     pub argv: Vec<String>,
     pub detached: bool,
     pub started_at_epoch_secs: u64,
+    pidfd: Option<OwnedFd>,
     tx: OnceLock<broadcast::Sender<Chunk>>,
     ring: Mutex<Ring>,
     state: Mutex<State>,
@@ -142,6 +144,15 @@ impl Proc {
                 std::io::ErrorKind::InvalidInput,
                 "not a pty",
             )),
+        }
+    }
+
+    pub fn signal_group(&self, sig: i32) {
+        match &self.pidfd {
+            #[cfg(target_os = "linux")]
+            Some(fd) => sysutil::signal_pidfd_group(fd, self.pid, sig),
+            _ if self.exit_code().is_none() => sysutil::signal_group(self.pid, sig),
+            _ => {}
         }
     }
 

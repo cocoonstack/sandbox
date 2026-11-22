@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::proc::{Chunk, Table, write_chunk};
 use crate::proto::{self, ErrorKind, ExecReq, Request, Response};
-use crate::{exec, find, forward, fs, git, lsp, pty, session, sysutil, tree, tun, watch};
+use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, tun, watch};
 
 type Parsed = serde_json::Result<Request>;
 type Feeder<R> = JoinHandle<(R, Option<Parsed>)>;
@@ -275,10 +275,7 @@ impl State {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
-        // an exited pid may already be recycled, so signalling it would hit an unrelated process.
-        if proc.exit_code().is_none() {
-            sysutil::signal_group(proc.pid, signal.unwrap_or(libc::SIGKILL));
-        }
+        proc.signal_group(signal.unwrap_or(libc::SIGKILL));
         proto::write_frame(w, &Response::Done).await
     }
 
@@ -305,7 +302,6 @@ impl State {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
-        // snapshot replay and subscribe atomically so a chunk lands in exactly one of them.
         let (replay, mut rx, exit) = proc.attach_stream();
         let mut frame = Vec::new();
         for chunk in replay {

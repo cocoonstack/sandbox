@@ -36,7 +36,7 @@ var (
 			schema(props{"sandbox_id": str(sandboxIDDesc)}, "sandbox_id"), toolPs,
 		},
 		{
-			"kill", "Send a signal to a tracked process. Killing a process that already exited is a no-op success; the guest never re-signals a reaped pid.",
+			"kill", "Send a signal to the process group a tracked pid leads, even after the pid itself exited; an empty group is a no-op success.",
 			schema(props{"sandbox_id": str(sandboxIDDesc), "pid": integer("guest pid from spawn or ps"), "signal": integer("signal number, e.g. 15 for SIGTERM; 0 sends SIGKILL")}, "sandbox_id", "pid"), toolKill,
 		},
 		{

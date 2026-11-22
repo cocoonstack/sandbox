@@ -187,7 +187,7 @@ class Sandbox:
         return cast(list[dict[str, Any]], _need(self._call("ps", "procs"), "procs"))
 
     def kill(self, pid: int, signal: int | None = None) -> None:
-        """Signals a tracked process (default SIGKILL); killing one that already exited is a no-op success."""
+        """Signals the process group a tracked pid leads (default SIGKILL), even after the pid exited."""
         self._done_rpc("kill", pid=pid, signal=signal or None)
 
     def logs(

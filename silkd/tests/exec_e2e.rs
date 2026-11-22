@@ -4,6 +4,9 @@
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +47,29 @@ async fn wait_for_exit(state: &Arc<State>, pid: u64) -> Vec<Value> {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("pid {pid} never exited");
+}
+
+async fn pid_written_to(marker: &Path) -> u32 {
+    under_deadline(async {
+        loop {
+            if let Ok(s) = std::fs::read_to_string(marker)
+                && let Ok(n) = s.trim().parse::<u32>()
+            {
+                return n;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+}
+
+async fn wait_dead(pid: u32) {
+    under_deadline(async {
+        while alive(pid) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
 }
 
 async fn wait_listed(state: &Arc<State>, pid: u64) -> Value {
@@ -229,28 +255,87 @@ async fn kill_ends_the_whole_command_not_only_its_shell() {
     let script = format!("sleep 300 & echo $! > {}; wait", marker.display());
     let pid = detached_pid(&state, &script).await;
     wait_listed(&state, pid).await;
-    let child = tokio::time::timeout(common::DEADLINE, async {
-        loop {
-            if let Ok(s) = std::fs::read_to_string(&marker)
-                && let Ok(n) = s.trim().parse::<u32>()
-            {
-                return n;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the shell never wrote its child's pid");
+    let child = pid_written_to(&marker).await;
     let killed = one(&state, &format!(r#"{{"op":"kill","pid":{pid}}}"#)).await;
     assert_eq!(type_of(&killed[0]), "done");
     wait_for_exit(&state, pid).await;
-    tokio::time::timeout(common::DEADLINE, async {
-        while alive(child) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    wait_dead(child).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn kill_after_the_leader_exited_ends_its_background_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("child");
+    let state = Arc::new(State::new());
+    let script = format!("sleep 300 >/dev/null 2>&1 & echo $! > {}", marker.display());
+    let pid = detached_pid(&state, &script).await;
+    let child = pid_written_to(&marker).await;
+    wait_for_exit(&state, pid).await;
+    assert!(alive(child), "the background child died with its leader");
+    let killed = one(&state, &format!(r#"{{"op":"kill","pid":{pid}}}"#)).await;
+    assert_eq!(type_of(&killed[0]), "done");
+    wait_dead(child).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_client_gone_after_the_leader_exited_ends_its_background_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("child");
+    let state = Arc::new(State::new());
+    let script = format!(
+        "sleep 300 >/dev/null 2>&1 & echo $! > {}; head -c 1572864 /dev/zero",
+        marker.display()
+    );
+    let (cw, mut lines, handle) =
+        connect_with(&state, json!({"op":"exec","argv":["/bin/sh","-c",script]})).await;
+    let started = next_frame(&mut lines).await;
+    assert_eq!(type_of(&started), "started");
+    let pid = started["pid"].as_u64().unwrap();
+    let child = pid_written_to(&marker).await;
+    wait_for_exit(&state, pid).await;
+    assert!(alive(child), "the background child died with its leader");
+    drop(lines);
+    drop(cw);
+    let _ = under_deadline(handle).await;
+    wait_dead(child).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "needs root"]
+async fn kill_of_an_emptied_group_spares_a_new_group_with_its_id() {
+    let state = Arc::new(State::new());
+    let mut landed = None;
+    for _ in 0..20 {
+        let pid = detached_pid(&state, "exit 0").await;
+        wait_for_exit(&state, pid).await;
+        if let Some(other) = spawn_term_blocked_as(u32::try_from(pid).unwrap()) {
+            landed = Some((pid, other));
+            break;
         }
-    })
-    .await
-    .expect("the command's child outlived the kill");
+    }
+    let (pid, mut other) = landed.expect("no spawn landed on an emptied group's id");
+    let killed = one(
+        &state,
+        &format!(r#"{{"op":"kill","pid":{pid},"signal":15}}"#),
+    )
+    .await;
+    assert_eq!(type_of(&killed[0]), "done");
+    let pending = std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .unwrap()
+        .lines()
+        .find_map(|l| l.strip_prefix("ShdPnd:"))
+        .map(|m| u64::from_str_radix(m.trim(), 16).unwrap())
+        .unwrap();
+    other.kill().unwrap();
+    other.wait().unwrap();
+    assert_eq!(
+        pending & (1 << (libc::SIGTERM - 1)),
+        0,
+        "kill reached a new group that reused the emptied group's id"
+    );
 }
 
 #[tokio::test]
@@ -466,6 +551,34 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         read < 256 * 1024,
         "the forked child read {read} bytes: stdin kept flowing after its client left"
     );
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_term_blocked_as(pid: u32) -> Option<std::process::Child> {
+    for _ in 0..10 {
+        std::fs::write("/proc/sys/kernel/ns_last_pid", (pid - 1).to_string()).unwrap();
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("30").process_group(0);
+        // SAFETY: the hook calls only async-signal-safe sigemptyset, sigaddset and sigprocmask.
+        unsafe {
+            cmd.pre_exec(|| {
+                let mut set: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut set);
+                libc::sigaddset(&mut set, libc::SIGTERM);
+                if libc::sigprocmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().unwrap();
+        if child.id() == pid {
+            return Some(child);
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+    None
 }
 
 fn group_member() -> Option<String> {
