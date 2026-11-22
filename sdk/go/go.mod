@@ -1,6 +1,6 @@
 module github.com/cocoonstack/sandbox/sdk/go
 
-go 1.27.1
+go 1.27.4
 
 replace github.com/cocoonstack/sandbox/protocol/wire => ../../protocol/wire
 

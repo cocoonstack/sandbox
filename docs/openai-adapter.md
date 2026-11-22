@@ -9,11 +9,13 @@ inside a real hardened VM instead of a local process or container.
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions
 
 client = CocoonSandboxClient()
-session = await client.create(options=CocoonSandboxClientOptions(
-    addr="10.0.0.5:7777",
-    api_token="...",
-    template="ghcr.io/cocoonstack/sandbox/rt:24.04",
-))
+session = await client.create(
+    options=CocoonSandboxClientOptions(
+        addr="10.0.0.5:7777",
+        api_token="...",
+        template="ghcr.io/cocoonstack/sandbox/rt:24.04",
+    )
+)
 async with session:
     result = await session.exec("python3", "script.py", shell=False)
 await client.delete(session)

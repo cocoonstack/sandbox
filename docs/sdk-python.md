@@ -5,7 +5,7 @@ from cocoonsandbox import Client
 
 client = Client("10.0.0.5:7777", api_token="...")
 with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
-    print(sb.exec("echo", "hello"))          # "hello\n"
+    print(sb.exec("echo", "hello"))  # "hello\n"
 ```
 
 `pip install cocoonstack-sandbox` — stdlib-only, no dependencies, and
@@ -132,16 +132,19 @@ directly. To recover a handle when only `id` + `token` survived (say,
 across a process restart):
 
 ```python
-sb = client.lookup(id, token)   # lists the peers, then probes the entry node and every peer concurrently
+sb = client.lookup(id, token)  # lists the peers, then probes the entry node and every peer concurrently
 ```
 
 ## Claiming
 
 ```python
-sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
-                net="egress", size="medium", ttl_seconds=600,
-                volumes=["imagenet", {"name": "weights", "mount": "/models"},
-                         {"name": "scratch-db", "mode": "rw"}])
+sb = client.new(
+    "ghcr.io/cocoonstack/sandbox/rt:24.04",
+    net="egress",
+    size="medium",
+    ttl_seconds=600,
+    volumes=["imagenet", {"name": "weights", "mount": "/models"}, {"name": "scratch-db", "mode": "rw"}],
+)
 ```
 
 | parameter | values | default | meaning |
@@ -188,9 +191,14 @@ controller reservation and access gate across detach, hibernate, and wake.
 
 ```python
 for volume in client.volumes():
-    print(volume["name"], volume["default_mount"],
-          volume["size_bytes"], volume["available"], volume["nodes"],
-          volume.get("writable", False))
+    print(
+        volume["name"],
+        volume["default_mount"],
+        volume["size_bytes"],
+        volume["available"],
+        volume["nodes"],
+        volume.get("writable", False),
+    )
 ```
 
 `writable` is present (and `true`) only for a writable entry; a read-only
@@ -239,7 +247,7 @@ handle. See the [replacement tutorial](live-volumes.md) and
 ## Renewing
 
 ```python
-sb.renew(3600)                        # the lease now ends an hour from now
+sb.renew(3600)  # the lease now ends an hour from now
 ```
 
 `renew` resets the lease to `ttl_seconds` from now and returns the granted
@@ -253,8 +261,8 @@ guest wakes it, and then it can renew.
 ## Hibernating
 
 ```python
-sb.hibernate()                        # snapshot + stop atomically; memory freed
-sb.exec("cat", "/tmp/state")          # the next call that reaches the guest wakes it transparently
+sb.hibernate()  # snapshot + stop atomically; memory freed
+sb.exec("cat", "/tmp/state")  # the next call that reaches the guest wakes it transparently
 ```
 
 `hibernate` snapshots the VM and stops it in one atomic step. The handle
@@ -295,7 +303,7 @@ renewed, so after an archive/wake transition read the current one from
 ## Forking
 
 ```python
-children = sb.fork(2, ttl_seconds=600)   # list[Sandbox], own leases
+children = sb.fork(2, ttl_seconds=600)  # list[Sandbox], own leases
 ```
 
 Clones the sandbox into fresh, fully independent claims: memory, disk, and
@@ -310,10 +318,10 @@ All-or-nothing: on error no child survived. Count is capped at the node's
 ## Promoting to a template
 
 ```python
-tpl = sb.promote("myproj:v1")     # publish current state
-child = tpl.new()                 # clones the promoted state
+tpl = sb.promote("myproj:v1")  # publish current state
+child = tpl.new()  # clones the promoted state
 assert tpl.content_digest and tpl.content_digest == child.template_digest
-tpl.delete()                      # caller owns the lifecycle
+tpl.delete()  # caller owns the lifecycle
 ```
 
 Templates are keyed by (name, the sandbox's network lane, its size); on
@@ -333,15 +341,15 @@ value and close/refuse a mismatch.
 
 ```python
 sb.write_file("/root/state.txt", b"v1")
-ckpt = sb.checkpoint("after-setup")       # source keeps running
+ckpt = sb.checkpoint("after-setup")  # source keeps running
 sb.write_file("/root/state.txt", b"v2")
 
-branch = ckpt.new()                        # a fresh sandbox at the captured moment
-branch.read_file("/root/state.txt")        # b"v1"
-sb.read_file("/root/state.txt")            # b"v2" — source unaffected
+branch = ckpt.new()  # a fresh sandbox at the captured moment
+branch.read_file("/root/state.txt")  # b"v1"
+sb.read_file("/root/state.txt")  # b"v2" — source unaffected
 ckpt.delete()
-client.checkpoints()                       # node's checkpoints, newest first
-known = client.checkpoint("ck_…")          # known id; no listing round-trip
+client.checkpoints()  # node's checkpoints, newest first
+known = client.checkpoint("ck_…")  # known id; no listing round-trip
 ```
 
 A checkpoint captures memory, disk, and running processes without stopping
@@ -361,11 +369,11 @@ best-effort cleanup rather than a fleet-wide revocation; see
 ## Language servers (LSP)
 
 ```python
-lsp = sb.start_lsp("python", "/work")   # flavor image provides the server
-stream = lsp.request()                  # JSON-RPC byte stream (frame it yourself)
+lsp = sb.start_lsp("python", "/work")  # flavor image provides the server
+stream = lsp.request()  # JSON-RPC byte stream (frame it yourself)
 # ... speak Content-Length-framed JSON-RPC over stream.send()/recv() ...
-stream.close()                          # ends the session and reaps the server
-lsp.close()                             # same as lsp.stop(); both are context-managers
+stream.close()  # ends the session and reaps the server
+lsp.close()  # same as lsp.stop(); both are context-managers
 ```
 
 `start_lsp` spawns the language server the flavor image ships for the
@@ -379,9 +387,9 @@ lifetime: closing the stream reaps it (start a new one to keep working);
 ## Reaching guest ports
 
 ```python
-conn = sb.dial_port(8080)                        # byte stream to 127.0.0.1:8080 in the guest
-listener = sb.proxy_port("127.0.0.1:0", 8080)    # local listener piping to it
-url = sb.preview_url(8080, ttl_seconds=1800)     # signed, shareable browser URL
+conn = sb.dial_port(8080)  # byte stream to 127.0.0.1:8080 in the guest
+listener = sb.proxy_port("127.0.0.1:0", 8080)  # local listener piping to it
+url = sb.preview_url(8080, ttl_seconds=1800)  # signed, shareable browser URL
 ```
 
 `dial_port` returns a `PortConn` (`send`/`recv`/`close_write`/`close`,
@@ -398,7 +406,7 @@ is resource-creating and takes the api token, like fork and checkpoint.
 ## Node info
 
 ```python
-client.info()   # pools, claims, drain, at_capacity/reason, and mesh peers
+client.info()  # pools, claims, drain, at_capacity/reason, and mesh peers
 ```
 
 `at_capacity: true` means refill is parked because the node cannot start
@@ -409,14 +417,18 @@ refill is not capacity-blocked.
 ## Running commands
 
 ```python
-out = sb.exec("python3", "script.py")            # stdout; ExitError on rc != 0
+out = sb.exec("python3", "script.py")  # stdout; ExitError on rc != 0
 
-code = sb.run(["bash", "-c", "make test"],
-              cwd="/work", env={"CI": "1"}, user="ubuntu",
-              stdin=input_bytes,
-              on_stdout=lambda b: sys.stdout.buffer.write(b),
-              on_stderr=lambda b: sys.stderr.buffer.write(b),
-              timeout=600)                          # seconds; TimeoutError past it
+code = sb.run(
+    ["bash", "-c", "make test"],
+    cwd="/work",
+    env={"CI": "1"},
+    user="ubuntu",
+    stdin=input_bytes,
+    on_stdout=lambda b: sys.stdout.buffer.write(b),
+    on_stderr=lambda b: sys.stderr.buffer.write(b),
+    timeout=600,
+)  # seconds; TimeoutError past it
 ```
 
 `stdin` takes `bytes`, `bytearray` or `memoryview`; a non-empty `str` raises
@@ -447,11 +459,11 @@ completion, and the session's `close()` is what ends the session.
 ## Background processes
 
 ```python
-pid = sb.spawn("sh", "-c", "make build")     # returns immediately
-sb.ps()                                       # [{pid, argv, detached, state, exit_code?, ...}]
-code = sb.logs(pid, on_stdout=out.append)     # replay the bounded ring; None while running
-code = sb.attach(pid, on_stdout=out.append)   # replay, then follow live until exit
-sb.kill(pid)                                  # default SIGKILL
+pid = sb.spawn("sh", "-c", "make build")  # returns immediately
+sb.ps()  # [{pid, argv, detached, state, exit_code?, ...}]
+code = sb.logs(pid, on_stdout=out.append)  # replay the bounded ring; None while running
+code = sb.attach(pid, on_stdout=out.append)  # replay, then follow live until exit
+sb.kill(pid)  # default SIGKILL
 ```
 
 `spawn` starts the command detached with a bounded output ring; `logs` replays
@@ -468,12 +480,12 @@ A session is a real persistent shell: cwd, env and shell state survive
 across calls.
 
 ```python
-sess = sb.session(cwd="/work", env={"PATH": "..."})   # context-manager
-sess.exec("export", "MARK=1")            # persists
-sess.exec("sh", "-c", "echo $MARK")      # "1\n"
+sess = sb.session(cwd="/work", env={"PATH": "..."})  # context-manager
+sess.exec("export", "MARK=1")  # persists
+sess.exec("sh", "-c", "echo $MARK")  # "1\n"
 sess.close()
 
-sb.sessions()                            # live session ids
+sb.sessions()  # live session ids
 ```
 
 Idle sessions are reaped guest-side after 30 minutes.
@@ -481,10 +493,10 @@ Idle sessions are reaped guest-side after 30 minutes.
 ## Files
 
 ```python
-sb.write_file("/work/a.txt", b"data")     # atomic; mode=0o755 optional
+sb.write_file("/work/a.txt", b"data")  # atomic; mode=0o755 optional
 data = sb.read_file("/work/a.txt")
-ents = sb.list_dir("/work")               # [{"name", "kind", "size"}]
-info = sb.stat("/work/a.txt")             # {"kind", "size", "mode", "mtime_epoch_secs"}
+ents = sb.list_dir("/work")  # [{"name", "kind", "size"}]
+info = sb.stat("/work/a.txt")  # {"kind", "size", "mode", "mtime_epoch_secs"}
 sb.mkdir("/work/sub", parents=True)
 sb.remove("/work/sub", recursive=True)
 sb.rename("/a", "/b")
@@ -497,8 +509,8 @@ keeps its exec bit.
 ## Project trees
 
 ```python
-sb.push("/work", tar_bytes)    # extract a tar stream under /work (atomic)
-tar = sb.pull("/work")         # /work back as tar bytes
+sb.push("/work", tar_bytes)  # extract a tar stream under /work (atomic)
+tar = sb.pull("/work")  # /work back as tar bytes
 ```
 
 `push` is atomic against a truncated stream and needs no egress policy, so it
@@ -510,7 +522,7 @@ brings a project into a no-network sandbox whose pool allows no git host.
 matches = sb.find("/work", r"TODO|FIXME", glob="*.py")
 from contextlib import closing
 
-with closing(sb.find_iter("/work", r"TODO")) as stream:   # streamed; closing ends the walk in the guest
+with closing(sb.find_iter("/work", r"TODO")) as stream:  # streamed; closing ends the walk in the guest
     for m in stream:
         if m["line"] > 100:
             break
@@ -530,7 +542,7 @@ would pass the 8 MiB cap.
 
 ```python
 w = sb.watch("/work", recursive=True)
-for ev in w:                       # {"type", "kind", "path"}
+for ev in w:  # {"type", "kind", "path"}
     print(ev["kind"], ev["path"])  # created|modified|deleted|renamed
 w.close()
 ```
@@ -545,12 +557,12 @@ when the relay drops, which `w.error` tells apart from a clean close (`None`).
 
 ```python
 sb.git_clone(url, "/work/repo", branch="main", depth=1, auth=token)
-st = sb.git_status("/work/repo")          # {"type", "branch", "ahead", "behind", "files", "truncated"?}
+st = sb.git_status("/work/repo")  # {"type", "branch", "ahead", "behind", "files", "truncated"?}
 sb.git_add("/work/repo", ["a.txt"])
 sha = sb.git_commit("/work/repo", "message", "Dev <dev@example.com>")
 sb.git_push("/work/repo", auth=token)
 sb.git_pull("/work/repo", auth=token)
-br = sb.git_branches("/work/repo")        # {"type", "current", "branches"}
+br = sb.git_branches("/work/repo")  # {"type", "current", "branches"}
 sb.git_create_branch("/work/repo", "feature")
 sb.git_checkout("/work/repo", "feature")
 sb.git_delete_branch("/work/repo", "feature")
@@ -565,10 +577,10 @@ not allow the git host fails them with git's own error.
 ## Terminals
 
 ```python
-pty = sb.open_pty(cols=120, rows=40)      # context-manager; pty.pid is the guest process
+pty = sb.open_pty(cols=120, rows=40)  # context-manager; pty.pid is the guest process
 pty.write(b"make test\n")
-data = pty.read()                         # b"" when the shell exits
-pty.exit_code                             # the shell's status, once read() returned b""
+data = pty.read()  # b"" when the shell exits
+pty.exit_code  # the shell's status, once read() returned b""
 pty.resize(200, 50)
 pty.close()
 ```
@@ -577,12 +589,12 @@ pty.close()
 
 ```python
 sb = client.new("rt:24.04", claim_ref="ns/workload")
-client.sandboxes()                     # one summary dict per live claim — never tokens
-client.drain()                         # refuse new claims, run leases out
+client.sandboxes()  # one summary dict per live claim — never tokens
+client.drain()  # refuse new claims, run leases out
 client.undrain()
-client.cordon()                        # refuse new claims across restarts; moves and adoptions still land
+client.cordon()  # refuse new claims across restarts; moves and adoptions still land
 client.uncordon()
-client.attach(owner_addr, id, token)   # bind a known handle, no lookup round-trip
+client.attach(owner_addr, id, token)  # bind a known handle, no lookup round-trip
 ```
 
 `sandboxes()` is scoped to the calling token, so a tenant sees only its own
