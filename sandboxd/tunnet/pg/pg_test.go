@@ -152,6 +152,18 @@ func TestAssignReportsAFullSubnetAndFindsItsOnlyFreeAddress(t *testing.T) {
 	}
 }
 
+func TestAssignFindsAFreeAddressTheSharedCursorSkipped(t *testing.T) {
+	s := openSubnet(t, metastoretest.PGSchema(t), "c1", "240.0.0.0/29", time.Hour)
+	hold(t, s, 5)
+	if _, err := s.pool.Exec(t.Context(), `ALTER SEQUENCE sandboxd_tun_addrs_cursor INCREMENT BY 2 RESTART WITH 1`); err != nil {
+		t.Fatalf("skew the cursor: %v", err)
+	}
+	want := tunnet.HostAt(s.subnet, 0)
+	if addr, err := s.Assign(t.Context(), "sb_last"); err != nil || addr != want {
+		t.Errorf("assign with %s free behind a cursor that skips it = %s %v, want %s", want, addr, err, want)
+	}
+}
+
 func TestCellsKeepTheirOwnAddresses(t *testing.T) {
 	dsn := metastoretest.PGSchema(t)
 	c1, c2 := open(t, dsn, "c1", time.Hour), open(t, dsn, "c2", time.Hour)

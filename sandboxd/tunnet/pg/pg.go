@@ -26,8 +26,8 @@ const (
 	assignSQL = `WITH held AS (
 		SELECT address FROM sandboxd_tun_addrs WHERE cell = $1 AND claim = $2 AND released_at IS NULL
 	), walk AS (
-		SELECT host($3::inet + (1 + nextval('sandboxd_tun_addrs_cursor') % $4)) AS address
-		FROM (SELECT generate_series(1, $6::bigint) WHERE NOT EXISTS (SELECT 1 FROM held)) candidates
+		SELECT host($3::inet + (1 + CASE WHEN $7 THEN g - 1 ELSE nextval('sandboxd_tun_addrs_cursor') % $4 END)) AS address
+		FROM (SELECT generate_series(1, $6::bigint) AS g WHERE NOT EXISTS (SELECT 1 FROM held)) candidates
 	), free AS (
 		SELECT address FROM walk w WHERE NOT EXISTS (
 			SELECT 1 FROM sandboxd_tun_addrs t WHERE t.cell = $1 AND t.address = w.address
@@ -72,22 +72,19 @@ func Open(ctx context.Context, dsn, cell string, subnet netip.Prefix, reuse time
 	return &Store{pool: pool, cell: cell, subnet: subnet.Masked(), reuse: reuse}, nil
 }
 
-// Assign returns claimID's active address, or claims the first candidate from the shared cursor that is free and past its reuse window, walking one window of candidates per round trip.
+// Assign returns claimID's active address, or claims the first candidate from the shared cursor that is free and past its reuse window, walking one window per round trip and sweeping the subnet once when the walk finds it full.
 func (s *Store) Assign(ctx context.Context, claimID string) (netip.Addr, error) {
 	hosts := int64(1)<<(32-s.subnet.Bits()) - 2
 	var walked int64
 	for range assignTries {
-		var addr *string
 		window := min(assignWindow, hosts-walked)
-		qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-		err := s.pool.QueryRow(qctx, assignSQL, s.cell, claimID, s.subnet.Addr().String(), hosts, s.reuse.Seconds(), window).Scan(&addr)
-		cancel()
+		addr, err := s.assign(ctx, claimID, hosts, window, false)
 		switch {
 		case err == nil && addr != nil:
 			return netip.ParseAddr(*addr)
 		case err == nil:
 			if walked += window; walked >= hosts {
-				return netip.Addr{}, tunnet.ErrNoAddress
+				return s.sweep(ctx, claimID, hosts)
 			}
 		case !errors.Is(err, pgx.ErrNoRows):
 			return netip.Addr{}, down(err)
@@ -176,6 +173,26 @@ func (s *Store) Reclaim(ctx context.Context, claim string, addr netip.Addr, age 
 
 func (s *Store) Close() {
 	s.pool.Close()
+}
+
+func (s *Store) sweep(ctx context.Context, claimID string, hosts int64) (netip.Addr, error) {
+	addr, err := s.assign(ctx, claimID, hosts, hosts, true)
+	switch {
+	case err == nil && addr != nil:
+		return netip.ParseAddr(*addr)
+	case err == nil, errors.Is(err, pgx.ErrNoRows):
+		return netip.Addr{}, tunnet.ErrNoAddress
+	default:
+		return netip.Addr{}, down(err)
+	}
+}
+
+func (s *Store) assign(ctx context.Context, claimID string, hosts, window int64, sweep bool) (*string, error) {
+	var addr *string
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	err := s.pool.QueryRow(qctx, assignSQL, s.cell, claimID, s.subnet.Addr().String(), hosts, s.reuse.Seconds(), window, sweep).Scan(&addr)
+	return addr, err
 }
 
 func down(err error) error {
