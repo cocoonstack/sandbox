@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "silkd"
-version = "0.1.36"
+version = "0.1.37"
 dependencies = [
  "base64",
  "io-uring",
