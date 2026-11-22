@@ -110,6 +110,7 @@ func TestAssignGivesUpAfterOneLapOrItsLastWindow(t *testing.T) {
 	}{
 		{"240.0.0.0/29", 6, 6},
 		{"240.0.0.0/20", 4094, 4094},
+		{"240.0.0.0/16", 65534, 65534},
 		{"240.0.0.0/8", assignTries*assignWindow + 1, assignTries * assignWindow},
 	}
 	for _, tt := range tests {
@@ -161,6 +162,33 @@ func TestAssignFindsAFreeAddressTheSharedCursorSkipped(t *testing.T) {
 	want := tunnet.HostAt(s.subnet, 0)
 	if addr, err := s.Assign(t.Context(), "sb_last"); err != nil || addr != want {
 		t.Errorf("assign with %s free behind a cursor that skips it = %s %v, want %s", want, addr, err, want)
+	}
+}
+
+func TestConcurrentSweepsHandOutEveryAddressTheCursorSkips(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	nodes := []*Store{openSubnet(t, dsn, "c1", "240.0.0.0/28", time.Hour), openSubnet(t, dsn, "c1", "240.0.0.0/28", time.Hour)}
+	if _, err := nodes[0].pool.Exec(t.Context(), `ALTER SEQUENCE sandboxd_tun_addrs_cursor INCREMENT BY 2 RESTART WITH 0 MINVALUE 0`); err != nil {
+		t.Fatalf("skew the cursor: %v", err)
+	}
+	var mu sync.Mutex
+	got := map[netip.Addr]bool{}
+	var wg sync.WaitGroup
+	for i := range 14 {
+		wg.Go(func() {
+			addr, err := nodes[i%2].Assign(t.Context(), fmt.Sprintf("sb_%d", i))
+			if err != nil {
+				t.Errorf("assign sb_%d with %d of 14 addresses handed out: %v", i, len(got), err)
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			got[addr] = true
+		})
+	}
+	wg.Wait()
+	if len(got) != 14 {
+		t.Errorf("handed out %d distinct addresses, want all 14", len(got))
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 
 const (
 	table = "sandboxd_tun_addrs"
-	// assignTries bounds the round trips one Assign makes; each walks at most assignWindow candidates.
+	// assignTries bounds the walk's round trips, each over at most assignWindow candidates, and the sweep's retries after lost races.
 	assignTries        = 64
 	assignWindow int64 = 1024
 
@@ -176,15 +176,18 @@ func (s *Store) Close() {
 }
 
 func (s *Store) sweep(ctx context.Context, claimID string, hosts int64) (netip.Addr, error) {
-	addr, err := s.assign(ctx, claimID, hosts, hosts, true)
-	switch {
-	case err == nil && addr != nil:
-		return netip.ParseAddr(*addr)
-	case err == nil, errors.Is(err, pgx.ErrNoRows):
-		return netip.Addr{}, tunnet.ErrNoAddress
-	default:
-		return netip.Addr{}, down(err)
+	for range assignTries {
+		addr, err := s.assign(ctx, claimID, hosts, hosts, true)
+		switch {
+		case err == nil && addr != nil:
+			return netip.ParseAddr(*addr)
+		case err == nil:
+			return netip.Addr{}, tunnet.ErrNoAddress
+		case !errors.Is(err, pgx.ErrNoRows):
+			return netip.Addr{}, down(err)
+		}
 	}
+	return netip.Addr{}, tunnet.ErrNoAddress
 }
 
 func (s *Store) assign(ctx context.Context, claimID string, hosts, window int64, sweep bool) (*string, error) {
