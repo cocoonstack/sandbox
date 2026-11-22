@@ -169,7 +169,7 @@ func TestAssignFindsAFreeAddressTheSharedCursorSkipped(t *testing.T) {
 func TestASweepThatLosesItsAddressTakesTheNextFreeOne(t *testing.T) {
 	ctx := t.Context()
 	s := openSubnet(t, metastoretest.PGSchema(t), "c1", "240.0.0.0/29", time.Hour)
-	for _, n := range []uint64{0, 2, 3, 4} {
+	for _, n := range []uint64{0, 2, 3, 4, 5} {
 		if _, err := s.pool.Exec(ctx, `INSERT INTO sandboxd_tun_addrs (cell, address, claim) VALUES ($1, $2, $3)`, s.cell, tunnet.HostAt(s.subnet, n).String(), fmt.Sprintf("held_%d", n)); err != nil {
 			t.Fatalf("hold: %v", err)
 		}
@@ -182,8 +182,15 @@ func TestASweepThatLosesItsAddressTakesTheNextFreeOne(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 	defer func() { _ = racer.Rollback(context.Background()) }()
+	var racerPID int
+	if err = racer.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&racerPID); err != nil {
+		t.Fatalf("racer pid: %v", err)
+	}
 	if _, err = racer.Exec(ctx, `INSERT INTO sandboxd_tun_addrs (cell, address, claim) VALUES ($1, $2, 'racer')`, s.cell, tunnet.HostAt(s.subnet, 1).String()); err != nil {
 		t.Fatalf("race: %v", err)
+	}
+	if _, err = racer.Exec(ctx, `DELETE FROM sandboxd_tun_addrs WHERE cell = $1 AND address = $2`, s.cell, tunnet.HostAt(s.subnet, 5).String()); err != nil {
+		t.Fatalf("free the next address: %v", err)
 	}
 	type result struct {
 		addr netip.Addr
@@ -196,7 +203,7 @@ func TestASweepThatLosesItsAddressTakesTheNextFreeOne(t *testing.T) {
 	}()
 	blocked := false
 	for range 100 {
-		if err = s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'WITH held%')`).Scan(&blocked); err != nil || blocked {
+		if err = s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, racerPID).Scan(&blocked); err != nil || blocked {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
