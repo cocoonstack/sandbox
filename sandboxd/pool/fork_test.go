@@ -27,6 +27,8 @@ func TestAForkChildHibernatedWhileAnEarlierChildArmsGetsNoDoors(t *testing.T) {
 	eng.sockRoot = outboundtest.SockRoot(t)
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: hostPolicy()})
 	parent := mustClaim(t, m, testKey)
+	parentHost := m.out
+	t.Cleanup(func() { parentHost.Disarm(parent.ID, true) })
 	var hibernated atomic.Pointer[types.Sandbox]
 	withOutbound(t, m, func(o *outbound.Options) {
 		armed := o.Armed
@@ -51,15 +53,19 @@ func TestAForkChildHibernatedWhileAnEarlierChildArmsGetsNoDoors(t *testing.T) {
 		}
 	})
 
-	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, time.Hour, "", ""); err != nil {
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, time.Hour, "", "")
+	if err != nil {
 		t.Fatalf("fork: %v", err)
+	}
+	forkHost := m.out
+	for _, c := range children {
+		t.Cleanup(func() { forkHost.Disarm(c.ID, true) })
 	}
 
 	later := hibernated.Load()
 	if later == nil {
 		t.Fatal("no later child was hibernated")
 	}
-	t.Cleanup(func() { m.out.Disarm(later.ID, true) })
 	for _, path := range []string{engine.BootSocketPath(later.VsockSocket), engine.EgressSocketPath(later.VsockSocket)} {
 		if conn, err := net.Dial("unix", path); err == nil {
 			_ = conn.Close()

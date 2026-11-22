@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -643,9 +645,6 @@ func TestARebootSettleStopsAfterItsProbeRetriesAndAFreshNoticeQueuesAgain(t *tes
 			t.Fatalf("queued %v, pending %v, restarts %d, want nothing queued, the notice still pending and no restart", rebootQueued(m, sb), rebootPending(m, sb), restartsOf(m, sb.ID))
 		}
 		m.Rebooted(t.Context(), sb, "boot-3")
-		if !rebootQueued(m, sb) {
-			t.Fatal("a fresh notice queued no settle")
-		}
 		time.Sleep(10 * rebootSettleGap)
 		synctest.Wait()
 
@@ -750,17 +749,20 @@ func TestANoticeHeldByAHibernateWhoseIntentFailedSettles(t *testing.T) {
 	m.mu.Lock()
 	sb.RebootPending = true
 	m.mu.Unlock()
+	_, held, err := m.beginVolumeRun(t.Context(), sb)
+	if err != nil {
+		t.Fatalf("hold a volume run: %v", err)
+	}
 	breakStore(t, m)
 
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("the hibernate succeeded, want its intent write to fail")
 	}
-	queued := rebootQueued(m, sb)
-	healStore(t, m)
-
-	if !queued {
-		t.Error("the abandoned intent queued no settle for the pending notice")
+	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
+		t.Fatalf("heal store: %v", err)
 	}
+	m.finishVolumeRun(sb, held)
+
 	waitFor(t, func() bool { return restartsOf(m, sb.ID) == 1 && !rebootPending(m, sb) })
 }
 

@@ -139,7 +139,7 @@ func (m *Manager) retryReboot(ctx context.Context, sb *types.Sandbox, probeErr e
 	case !waiting:
 		return
 	case retry:
-		logger.Warnf(ctx, "guest of %s did not answer its reboot settle, retry %d of %d in %s: %v", sb.ID, gate.retries, rebootProbeRetries, rebootSettleGap, probeErr)
+		logger.Warnf(ctx, "guest of %s did not answer its reboot settle, retry %d of %d in %s: %v", sb.ID, gate.retries, rebootProbeRetries, time.Until(gate.next).Round(time.Second), probeErr)
 	default:
 		logger.Warnf(ctx, "guest of %s did not answer its reboot settle; its next arm or notice settles it: %v", sb.ID, probeErr)
 	}
