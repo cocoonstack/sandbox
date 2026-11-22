@@ -12,11 +12,15 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-const rebootSettleGap = 30 * time.Second
+const (
+	rebootSettleGap    = 30 * time.Second
+	rebootProbeRetries = 3
+)
 
 type rebootGate struct {
-	next   time.Time
-	queued bool
+	next    time.Time
+	queued  bool
+	retries int
 }
 
 func (m *Manager) Rebooted(ctx context.Context, sb *types.Sandbox, bootID string) {
@@ -33,6 +37,9 @@ func (m *Manager) Rebooted(ctx context.Context, sb *types.Sandbox, bootID string
 	default:
 		accepted, journal = true, !sb.RebootPending
 		sb.BootID, sb.RebootPending = bootID, true
+		gate := m.reboots[sb]
+		gate.retries = 0
+		m.reboots[sb] = gate
 		if journal {
 			js = m.store.set(sb)
 		}
@@ -67,7 +74,8 @@ func (m *Manager) queueRebootLocked(ctx context.Context, sb *types.Sandbox) {
 	if gate.queued {
 		return
 	}
-	m.reboots[sb] = rebootGate{next: gate.next, queued: true}
+	gate.queued = true
+	m.reboots[sb] = gate
 	ctx = context.WithoutCancel(ctx)
 	time.AfterFunc(time.Until(gate.next), func() { m.settleReboot(ctx, sb) })
 }
@@ -82,8 +90,10 @@ func (m *Manager) settleReboot(ctx context.Context, sb *types.Sandbox) {
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	live := m.ownsRunLocked(sb, run) && runningShaped(sb) && !sb.ColdBooting && sb.RebootPending
+	gate, sock := m.reboots[sb], sb.VsockSocket
 	if live {
-		m.reboots[sb] = rebootGate{next: time.Now().Add(rebootSettleGap)}
+		gate.next, gate.queued = time.Now().Add(rebootSettleGap), false
+		m.reboots[sb] = gate
 	} else {
 		delete(m.reboots, sb)
 	}
@@ -91,11 +101,17 @@ func (m *Manager) settleReboot(ctx context.Context, sb *types.Sandbox) {
 	if !live {
 		return
 	}
+	if err := m.eng.Probe(runCtx, sock, claimProbeTimeout); err != nil {
+		m.retryReboot(ctx, sb, err)
+		return
+	}
 	mounted, restoreErr := m.restoreRebootedGuest(runCtx, sb, run)
 	if live, _ = m.commitIfLive(ctx, sb, func() {
 		sb.Restarts++
 		sb.RestartedAt = time.Now()
-		sb.RebootPending = m.reboots[sb].queued
+		done := m.reboots[sb]
+		sb.RebootPending, done.retries = done.queued, 0
+		m.reboots[sb] = done
 	}); !live {
 		return
 	}
@@ -107,6 +123,28 @@ func (m *Manager) settleReboot(ctx context.Context, sb *types.Sandbox) {
 	logger.Warnf(ctx, "guest of %s rebooted inside its VMM; restored env and %d volumes", sb.ID, mounted)
 }
 
+func (m *Manager) retryReboot(ctx context.Context, sb *types.Sandbox, probeErr error) {
+	m.mu.Lock()
+	gate := m.reboots[sb]
+	waiting := m.claimed[sb.ID] == sb && !gate.queued
+	retry := waiting && gate.retries < rebootProbeRetries
+	if retry {
+		gate.retries++
+		m.reboots[sb] = gate
+		m.queueRebootLocked(ctx, sb)
+	}
+	m.mu.Unlock()
+	logger := log.WithFunc("pool.retryReboot")
+	switch {
+	case !waiting:
+		return
+	case retry:
+		logger.Warnf(ctx, "guest of %s did not answer its reboot settle, retry %d of %d in %s: %v", sb.ID, gate.retries, rebootProbeRetries, rebootSettleGap, probeErr)
+	default:
+		logger.Warnf(ctx, "guest of %s did not answer its reboot settle; its next arm or notice settles it: %v", sb.ID, probeErr)
+	}
+}
+
 func (m *Manager) restoreRebootedGuest(ctx context.Context, sb *types.Sandbox, run *volumeRun) (int, error) {
 	m.mu.Lock()
 	env, sock := sb.Env, sb.VsockSocket
@@ -114,9 +152,6 @@ func (m *Manager) restoreRebootedGuest(ctx context.Context, sb *types.Sandbox, r
 		return v.AttachOnly || volumeIndex(sb.VolumesWant, v.Name) < 0
 	})
 	m.mu.Unlock()
-	if err := m.eng.Probe(ctx, sock, claimProbeTimeout); err != nil {
-		return 0, err
-	}
 	var errs []error
 	if env.HasGuest() {
 		if err := m.eng.WriteGuestEnv(ctx, sock, env.GuestFile()); err != nil {

@@ -154,6 +154,9 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from strin
 	}
 	live, err := m.commitIfLive(ctx, sb, func() {
 		sb.MoveIn = false
+		if sb.RebootPending {
+			m.queueRebootLocked(ctx, sb)
+		}
 		m.recordUsage(ctx, usage.Event{Event: "move_in", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
 	})
 	if !live {

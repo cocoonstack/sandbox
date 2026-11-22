@@ -673,10 +673,19 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
 		if armed {
-			m.disarmIfReleased(sb)
+			m.disarmIfDropped(sb)
 		}
 	}
 	return nil
+}
+
+func (m *Manager) disarmIfDropped(sb *types.Sandbox) {
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb
+	m.mu.Unlock()
+	if !live {
+		m.out.Disarm(sb.ID, false)
+	}
 }
 
 func (m *Manager) armIfRunning(ctx context.Context, sb *types.Sandbox) (bool, error) {

@@ -105,9 +105,13 @@ func TestARemountAfterAReleaseDuringItsProbeIsSkipped(t *testing.T) {
 		eng.mu.Lock()
 		eng.probeStall = stall
 		eng.mu.Unlock()
+		probes := eng.probeCount()
 
 		m.Rebooted(t.Context(), sb, "boot-2")
 		synctest.Wait()
+		if got := eng.probeCount(); got != probes+1 {
+			t.Fatalf("probes %d before the release, want the settle held in its probe", got-probes)
+		}
 		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatalf("release: %v", err)
 		}
@@ -589,6 +593,177 @@ func TestOnlyANoticeThatMakesAClaimPendingWritesTheJournal(t *testing.T) {
 	healStore(t, m)
 }
 
+func TestARebootSettleWhoseProbeFailsOnceSettlesOnTheRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newVolumeManager(t, eng, liveCatalog(t))
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		eng.mu.Lock()
+		eng.probeFails = 1
+		eng.mu.Unlock()
+
+		m.Rebooted(t.Context(), sb, "boot-2")
+		synctest.Wait()
+		if restartsOf(m, sb.ID) != 0 || !rebootPending(m, sb) || !rebootQueued(m, sb) {
+			t.Fatalf("restarts %d, pending %v, queued %v after a failed probe, want no commit and a retry queued", restartsOf(m, sb.ID), rebootPending(m, sb), rebootQueued(m, sb))
+		}
+		time.Sleep(rebootSettleGap)
+		synctest.Wait()
+
+		if restartsOf(m, sb.ID) != 1 || rebootPending(m, sb) {
+			t.Errorf("restarts %d, pending %v, want the retry to settle once", restartsOf(m, sb.ID), rebootPending(m, sb))
+		}
+		if got := liveMountsOf(eng); !slices.Equal(got, []string{"data:/volumes/data"}) {
+			t.Errorf("live mounts %v, want the retry to mount the volume", got)
+		}
+	})
+}
+
+func TestARebootSettleStopsAfterItsProbeRetriesAndAFreshNoticeQueuesAgain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		eng.mu.Lock()
+		eng.probeErr = errors.New("silkd probe: context deadline exceeded")
+		eng.mu.Unlock()
+		probes := eng.probeCount()
+
+		m.Rebooted(t.Context(), sb, "boot-2")
+		time.Sleep(10 * rebootSettleGap)
+		synctest.Wait()
+
+		if got := eng.probeCount() - probes; got != 1+rebootProbeRetries {
+			t.Errorf("probes %d, want one try and %d retries", got, rebootProbeRetries)
+		}
+		if rebootQueued(m, sb) || !rebootPending(m, sb) || restartsOf(m, sb.ID) != 0 {
+			t.Fatalf("queued %v, pending %v, restarts %d, want nothing queued, the notice still pending and no restart", rebootQueued(m, sb), rebootPending(m, sb), restartsOf(m, sb.ID))
+		}
+		m.Rebooted(t.Context(), sb, "boot-3")
+		if !rebootQueued(m, sb) {
+			t.Fatal("a fresh notice queued no settle")
+		}
+		time.Sleep(10 * rebootSettleGap)
+		synctest.Wait()
+
+		if got := eng.probeCount() - probes; got != 2*(1+rebootProbeRetries) {
+			t.Errorf("probes %d, want the fresh notice to start a new round of retries", got)
+		}
+	})
+}
+
+func TestAnArmSettlesAPendingNoticeAfterTheProbeRetriesStopped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		eng.mu.Lock()
+		eng.probeErr = errors.New("silkd probe: context deadline exceeded")
+		eng.mu.Unlock()
+		m.Rebooted(t.Context(), sb, "boot-2")
+		time.Sleep(10 * rebootSettleGap)
+		synctest.Wait()
+		eng.mu.Lock()
+		eng.probeErr = nil
+		eng.mu.Unlock()
+
+		if err := m.out.ArmProxy(t.Context(), sb); err != nil {
+			t.Fatalf("arm: %v", err)
+		}
+		synctest.Wait()
+
+		if restartsOf(m, sb.ID) != 1 || rebootPending(m, sb) {
+			t.Errorf("restarts %d, pending %v, want the arm to settle the pending notice", restartsOf(m, sb.ID), rebootPending(m, sb))
+		}
+	})
+}
+
+func TestAReleaseDuringArmKeepsTheTapLockedUntilTheDelayedRemoval(t *testing.T) {
+	eng := newFakeEngine()
+	eng.tap = "tap-fake0"
+	eng.sockRoot = outboundtest.SockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	editView(m, func(v *configView) { v.releaseDelay = 100 * time.Millisecond })
+	var taps outboundtest.TapLog
+	var released atomic.Bool
+	withOutbound(t, m, func(o *outbound.Options) {
+		o.Lock, o.Unlock = taps.Lock, taps.Unlock
+		armed := o.Armed
+		o.Armed = func(ctx context.Context, sb *types.Sandbox) {
+			armed(ctx, sb)
+			if released.CompareAndSwap(false, true) {
+				if err := m.Release(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
+					t.Errorf("release: %v", err)
+				}
+			}
+		}
+	})
+
+	sb, err := m.ClaimProvision(t.Context(), egKey, ClaimOptions{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	if got := taps.Unlocked(); len(got) != 0 {
+		t.Fatalf("unlocked %v while the released VM still runs, want the tap kept locked", got)
+	}
+	time.Sleep(150 * time.Millisecond)
+	m.retryRemovals(t.Context()).Wait()
+	if got := taps.Unlocked(); !slices.Equal(got, []string{"tap-fake0"}) || !eng.removed(sb.VMName) {
+		t.Errorf("unlocked %v, removed %v, want the removal to unlock the tap", got, eng.removed(sb.VMName))
+	}
+}
+
+func TestANoticeDuringAMoveInStartSettlesWhenTheMoveInCommits(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	var noticed atomic.Bool
+	withOutbound(t, mc.t, func(o *outbound.Options) {
+		armed := o.Armed
+		o.Armed = func(ctx context.Context, moved *types.Sandbox) {
+			armed(ctx, moved)
+			mc.t.mu.Lock()
+			moving := moved.MoveIn
+			mc.t.mu.Unlock()
+			if moving && noticed.CompareAndSwap(false, true) {
+				mc.t.Rebooted(ctx, moved, "boot-2")
+			}
+		}
+	})
+
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	if !noticed.Load() {
+		t.Fatal("no notice reached the destination before its move-in committed")
+	}
+	waitJournaledReboot(t, mc.t, sb.ID, 1, "boot-2")
+}
+
+func TestANoticeHeldByAHibernateWhoseIntentFailedSettles(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.RebootPending = true
+	m.mu.Unlock()
+	breakStore(t, m)
+
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("the hibernate succeeded, want its intent write to fail")
+	}
+	queued := rebootQueued(m, sb)
+	healStore(t, m)
+
+	if !queued {
+		t.Error("the abandoned intent queued no settle for the pending notice")
+	}
+	waitFor(t, func() bool { return restartsOf(m, sb.ID) == 1 && !rebootPending(m, sb) })
+}
+
 func TestARebootSettleWaitsForAVolumeChangeAndRemountsTheSetItApplied(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -789,6 +964,7 @@ func TestANoticeDuringAColdBootFinishedAtStartupIsRecordedWithoutASettle(t *test
 		ID: "sb_cb", VMName: "sbx-cb-1", Key: testKey, Token: "tok", VsockSocket: sock, ColdBooting: true,
 	}})
 	m := mustManager(t, &config.Config{DataDir: dataDir}, eng)
+	t.Cleanup(func() { m.out.Disarm("sb_cb", true) })
 	probes := eng.probeCount()
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)

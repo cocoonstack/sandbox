@@ -106,7 +106,12 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return ErrUnknownSandbox
 	}
 	if err := m.store.commit(intent); err != nil {
-		m.setIfLive(sb, func() { sb.PendingSnap = "" })
+		m.setIfLive(sb, func() {
+			sb.PendingSnap = ""
+			if sb.RebootPending {
+				m.queueRebootLocked(ctx, sb)
+			}
+		})
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
 	readerSafe := false
