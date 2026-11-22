@@ -121,9 +121,9 @@ and when the same env is sent again; a change to host-only entries never
 touches it. A unit that must follow a change restarts on it, for example from
 a `.path` unit. The file is in the guest's memory, so it survives hibernate
 and archive, and a reboot inside the guest loses it until the host writes it
-again on the [boot notice](#boot-notice); a branch, fork child or promoted-template clone whose source had
-guest entries gets its file rewritten at claim with its own claim's entries
-(none for a fork child).
+again on the [boot notice](#boot-notice); a branch, fork child or
+promoted-template clone whose source had guest entries gets its file rewritten
+at claim with its own claim's entries (none for a fork child).
 
 ## Boot notice
 

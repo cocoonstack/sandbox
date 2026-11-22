@@ -669,8 +669,8 @@ and port relays that callers open are not in that figure; each holds up to 6
 more, the same way. systemd 240 and newer raise `fs.nr_open` to the kernel's
 maximum at boot; never lower it below 4,096 × the claims that can fill their
 doors at once on the node, which `max_running` bounds when set, plus
-sandboxd's own share. Every claim and every warm VM also holds one descriptor
-for its [boot door](#guest-reboots), whatever its egress policy.
+sandboxd's own share. Every armed claim and every prebound warm VM also holds
+one descriptor for its [boot door](#guest-reboots), whatever its egress policy.
 
 Each record carries its syslog level, so alerting keys on systemd priority:
 `journalctl -u sandboxd -p err` lists the errors and `-p warning` the
@@ -804,8 +804,10 @@ moves. The instance-metadata document is not restored, so re-send it when
 `restarts` moves.
 
 A claim settles at most once every 30 s: notices inside that gap become one
-settle when it ends. A notice during a cold boot or a wake only records its
-boot, since that boot restores the guest itself. A notice for a hibernated,
+settle when it ends. An accepted notice is journaled until its settle
+commits, so a sandboxd restart, a hibernate and wake, or a move inside the gap
+still runs it when the claim's doors are armed again. A notice during a cold
+boot only records its boot, since that boot restores the guest itself. A notice for a hibernated,
 archived, failed or released claim is dropped. Guest root can dial the door,
 so a forged notice costs only its own claim one settle per gap. silkd sends
 one notice per boot and never retries it, so a reboot while sandboxd is down
