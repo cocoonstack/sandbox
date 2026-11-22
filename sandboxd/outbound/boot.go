@@ -23,12 +23,7 @@ const (
 )
 
 func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox) {
-	h.mu.Lock()
-	ln, displaced := h.preboots[sb.VMName], h.boots[sb.ID]
-	delete(h.preboots, sb.VMName)
-	delete(h.boots, sb.ID)
-	h.mu.Unlock()
-	closeBoot(displaced)
+	ln := h.takeBoot(sb)
 	if sb.VsockSocket == "" {
 		closeBoot(ln)
 		return
@@ -44,10 +39,36 @@ func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox) {
 			return
 		}
 	}
-	h.mu.Lock()
-	h.boots[sb.ID] = ln
-	h.mu.Unlock()
+	if !h.publishBoot(sb.ID, ln) {
+		closeBoot(ln)
+		return
+	}
 	go h.serveBoot(context.WithoutCancel(ctx), sb, ln)
+}
+
+func (h *Host) takeBoot(sb *types.Sandbox) *net.UnixListener {
+	h.mu.Lock()
+	ln, displaced := h.preboots[sb.VMName], h.boots[sb.ID]
+	delete(h.preboots, sb.VMName)
+	if sb.VsockSocket == "" {
+		delete(h.boots, sb.ID)
+	} else {
+		h.boots[sb.ID] = nil
+	}
+	h.mu.Unlock()
+	closeBoot(displaced)
+	return ln
+}
+
+func (h *Host) publishBoot(id string, ln *net.UnixListener) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	held, reserved := h.boots[id]
+	if !reserved || held != nil {
+		return false
+	}
+	h.boots[id] = ln
+	return true
 }
 
 func (h *Host) serveBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListener) {

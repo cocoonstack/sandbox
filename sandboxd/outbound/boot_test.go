@@ -89,6 +89,30 @@ func TestARearmReplacesTheBootDoorAndClosePreboundDropsAnUnclaimedOne(t *testing
 	}
 }
 
+func TestABootDoorDisarmedWhileItBindsIsClosedNotPublished(t *testing.T) {
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, nil), nil)
+	sb := outboundtest.VsockSandbox(t, "sb_boot_race", testKey)
+	if ln := h.takeBoot(sb); ln != nil {
+		t.Fatalf("took %v, want no prebound door", ln.Addr())
+	}
+	h.Disarm(sb.ID, true)
+	ln, err := listenUnix(engine.BootSocketPath(sb.VsockSocket))
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	defer closeBoot(ln)
+
+	if h.publishBoot(sb.ID, ln) {
+		t.Error("a door whose claim was disarmed while it bound was published")
+	}
+	h.mu.Lock()
+	_, kept := h.boots[sb.ID]
+	h.mu.Unlock()
+	if kept {
+		t.Error("the disarmed claim still has a boot door entry")
+	}
+}
+
 func prebootCount(h *Host) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
