@@ -71,7 +71,7 @@ class FakeConn:
     def send(self, op, **fields):
         self.sent.append((op, fields))
 
-    def settimeout(self, timeout):
+    def settimeout(self, timeout, deadline=None):
         pass
 
     def finish_upgrade(self):

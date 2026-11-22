@@ -18,6 +18,7 @@ from .frames import MAX_FRAME, decode_response, encode_request
 _KEEP_ALIVE_CONNS = 8
 _FD_SETSIZE = 1024
 _READ_BUFFER = 64 * 1024
+_SEND_SLICE = 16 * 1024
 _TCP_KEEPALIVE = {"TCP_KEEPIDLE": 15, "TCP_KEEPALIVE": 15, "TCP_KEEPINTVL": 15, "TCP_KEEPCNT": 9}
 
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
@@ -49,18 +50,24 @@ class Conn(_Closeable):
         self._request = request
         self._upgrade_timeout = upgrade_timeout
         self._tag = tag
+        self._bound: tuple[float, float] | None = None
 
     def send(self, op: str, **fields: object) -> None:
         frame = encode_request(op, **fields)
         if self._request:
             frame, self._request = self._request + frame, b""
+        view = memoryview(frame)
         try:
-            self._sock.sendall(frame)
+            while view:
+                if self._bound is not None:
+                    self._sock.settimeout(remaining_timeout(*self._bound, "agent request"))
+                view = view[self._sock.send(view[:_SEND_SLICE]) :]
         except OSError as exc:
             raise _io_error("write", exc) from exc
 
-    def settimeout(self, timeout: float | None) -> None:
+    def settimeout(self, timeout: float | None, deadline: float | None = None) -> None:
         self._sock.settimeout(timeout)
+        self._bound = None if timeout is None or deadline is None else (timeout, deadline)
 
     def abort(self) -> None:
         """Unblocks a socket operation from another thread; close() still owns the socket."""
