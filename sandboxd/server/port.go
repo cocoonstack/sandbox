@@ -35,6 +35,9 @@ func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case writePoolErr(w, err):
 		return
+	case callerLeft(r.Context(), err):
+		log.WithFunc("server.handlePort").Debugf(r.Context(), "client canceled the dial of port %d of %s: %v", port, id, err)
+		return
 	case err != nil:
 		log.WithFunc("server.handlePort").Errorf(r.Context(), err, "dial port %d of %s", port, id)
 		writeErr(w, http.StatusBadGateway, "guest port unreachable")

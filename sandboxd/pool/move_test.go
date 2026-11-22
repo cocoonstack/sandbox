@@ -1666,7 +1666,7 @@ func TestMoveSourceBackFromAnOutageNeverResumesAClaimThatMovedOn(t *testing.T) {
 	}
 }
 
-func TestADataPlaneCallQueuedBehindAMoveAnswersByWhetherTheClaimStayed(t *testing.T) {
+func TestADataPlaneCallQueuedBehindAMoveAnswersByTheMovesOutcome(t *testing.T) {
 	calls := map[string]struct {
 		frame string
 		call  func(ctx context.Context, m *Manager, sb *types.Sandbox) error
@@ -1685,12 +1685,13 @@ func TestADataPlaneCallQueuedBehindAMoveAnswersByWhetherTheClaimStayed(t *testin
 	}
 	for name, c := range calls {
 		for _, tt := range []struct {
-			outcome string
-			moved   bool
-			want    error
+			outcome      string
+			moved, final bool
+			want         error
 		}{
-			{"the move commits", true, ErrUnknownSandbox},
-			{"the move aborts", false, nil},
+			{"the move commits", true, false, ErrUnknownSandbox},
+			{"the move aborts", false, false, nil},
+			{"the final round still waits", false, true, ErrEvacuating},
 		} {
 			t.Run(name+"/"+tt.outcome, func(t *testing.T) {
 				eng := newFakeEngine()
@@ -1704,8 +1705,16 @@ func TestADataPlaneCallQueuedBehindAMoveAnswersByWhetherTheClaimStayed(t *testin
 				done := make(chan error, 1)
 				go func() { done <- c.call(t.Context(), m, sb) }()
 				waitLockWaiter(t, c.frame)
+				m.mu.Lock()
+				m.moving[sb.ID] = &outMove{final: true}
+				m.mu.Unlock()
 				if tt.moved {
 					m.forgetClaim(t.Context(), sb)
+				}
+				if !tt.final {
+					m.mu.Lock()
+					delete(m.moving, sb.ID)
+					m.mu.Unlock()
 				}
 				sb.Transition.Unlock()
 				if err := <-done; !errors.Is(err, tt.want) {

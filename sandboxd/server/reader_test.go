@@ -236,6 +236,50 @@ func TestSleepingHandoverEndsWhenItsClaimIsFenced(t *testing.T) {
 	}
 }
 
+func TestASleepingHandoverWhoseSilkdNeverAnswersNotesTheGuest(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		answer bool
+	}{
+		{"silkd never answers", false},
+		{"silkd answers", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newSleepingEnv(t)
+			env.manager.unreachable = make(chan string, 1)
+			guest := tagServer("guest", env.frames, nil)
+			if !tt.answer {
+				guest = func(c net.Conn) {
+					defer c.Close()
+					_, _ = io.Copy(io.Discard, c)
+				}
+			}
+			env.srv.dialer = &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+				relayEnd, guestEnd := net.Pipe()
+				go guest(guestEnd)
+				return relayEnd, nil
+			}}
+			conn, r := env.upgrade(t)
+			send(t, conn, statFrame)
+			expectLine(t, r, "reader")
+			send(t, conn, execFrame)
+			if tt.answer {
+				expectLine(t, r, "guest")
+			}
+			_ = conn.Close()
+			if !tt.answer {
+				await(t, env.manager.unreachable, "a hand-over whose silkd never answered is not noted")
+				return
+			}
+			select {
+			case id := <-env.manager.unreachable:
+				t.Errorf("noted %s, whose silkd answered", id)
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
+	}
+}
+
 func TestSleepingFramesAreAuditedOnceOnEitherPath(t *testing.T) {
 	env := newSleepingEnv(t)
 	var mu sync.Mutex

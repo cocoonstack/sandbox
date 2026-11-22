@@ -240,6 +240,11 @@ func (m *Manager) AuditTokenRead(ctx context.Context, id string) {
 	m.recordAudit(ctx, id, auditFrame{Op: "token"})
 }
 
+func (m *Manager) countWake(start time.Time) {
+	m.counters.wakes.Add(1)
+	m.counters.wakeNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
+}
+
 func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) {
 	if m.audit == nil {
 		return

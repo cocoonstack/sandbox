@@ -1208,6 +1208,7 @@ func TestNoWakePortDialLeavesAPausedSandboxAsleep(t *testing.T) {
 		_, err := m.DialPortAwake(t.Context(), running.ID, Cred{Token: running.Token}, 49983)
 		dialed <- err
 	}()
+	waitLockWaiter(t, "pool.(*Manager).dialRunning")
 	m.mu.Lock()
 	running.PendingSnap = "snap"
 	m.store.set(running)
@@ -1365,7 +1366,7 @@ func TestAFailedPortDialNotesTheClaimWhenSilkdDidNotAnswerEvenAfterTheCallerLeft
 		noted     bool
 	}{
 		{"port forward, silkd silent", false, silent, false, true},
-		{"preview, silkd silent", true, silent, false, true},
+		{"operator port relay, silkd silent", true, silent, false, true},
 		{"nothing listens on the port", false, errors.New("port_forward 80: connection refused"), false, false},
 		{"silkd silent after the caller left", false, silent, true, true},
 	} {

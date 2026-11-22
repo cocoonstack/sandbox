@@ -433,11 +433,15 @@ func (m *Manager) lockServing(sb *types.Sandbox) error {
 	}
 	sb.Transition.Lock()
 	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb
+	live, paused := m.claimed[sb.ID] == sb, m.pausedForMoveLocked(sb)
 	m.mu.Unlock()
-	if !live {
+	switch {
+	case !live:
 		sb.Transition.Unlock()
 		return ErrUnknownSandbox
+	case paused:
+		sb.Transition.Unlock()
+		return ErrEvacuating
 	}
 	return nil
 }

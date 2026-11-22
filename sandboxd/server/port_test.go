@@ -4,15 +4,20 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"testing/iotest"
 	"testing/synctest"
 	"time"
+
+	"github.com/projecteru2/core/log"
+	"github.com/rs/zerolog"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
@@ -145,6 +150,40 @@ func TestPortRelayNoWakeAsksTheManagerNotToWake(t *testing.T) {
 	}
 	if waking != 1 || awake != 1 {
 		t.Errorf("waking dials %d, no-wake dials %d, want one each", waking, awake)
+	}
+}
+
+func TestAPortDialTheClientCanceledLogsBelowError(t *testing.T) {
+	logs := captureLogs(t)
+	global := log.GetGlobalLogger()
+	*global = global.Level(zerolog.InfoLevel)
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, tt := range []struct {
+		name  string
+		ctx   context.Context
+		error bool
+	}{
+		{"the client canceled", canceled, false},
+		{"the dial was canceled under a live client", t.Context(), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logs.Reset()
+			mgr := &fakeManager{dialPort: func(string, string, uint16) (net.Conn, error) {
+				return nil, fmt.Errorf("silkd unreachable: %w", context.Canceled)
+			}}
+			srv := New("", "node:7777", mgr, nil, nil, nil, nil, nil)
+			r := httptest.NewRequestWithContext(tt.ctx, http.MethodGet, "/v1/sandboxes/sb_1/ports/49983", nil)
+			r.Header.Set("Authorization", "Bearer tok")
+			r.Header.Set("Upgrade", "tcp")
+			r.Header.Set("Connection", "Upgrade")
+			r.SetPathValue("id", "sb_1")
+			r.SetPathValue("port", "49983")
+			srv.handlePort(httptest.NewRecorder(), r)
+			if got := strings.Contains(logs.String(), `"level":"error"`); got != tt.error {
+				t.Errorf("logged %q, want an error record %v", logs.String(), tt.error)
+			}
+		})
 	}
 }
 

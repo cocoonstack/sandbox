@@ -204,7 +204,9 @@ func (s *Server) serveSleeping(ctx context.Context, w http.ResponseWriter, id, t
 	defer done()
 	defer func() { _ = guest.Close() }()
 	s.retargetRelay(client, guest)
-	copyBoth(client, s.audited(ctx, id, io.MultiReader(bytes.NewReader(rt.replay), rt.br)), guest, silkdEnds, s.noSplice)
+	if copyBoth(client, s.audited(ctx, id, io.MultiReader(bytes.NewReader(rt.replay), rt.br)), guest, silkdEnds, s.noSplice) {
+		s.mgr.NoteUnreachable(id)
+	}
 }
 
 func (s *Server) openGuest(ctx context.Context, id string, cred pool.Cred, wake agentWaker) (net.Conn, func(), error) {

@@ -128,6 +128,50 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 	await(t, guestClosed, "guest side not closed after client disconnect")
 }
 
+func TestAnAgentRelayWhoseSilkdNeverAnswersNotesTheGuest(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		answer bool
+	}{
+		{"silkd never answers", false},
+		{"silkd answers", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{unreachable: make(chan string, 1)}
+			ts := newTestServer(t, "", mgr, pipeDialer(func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				frame, err := r.ReadString('\n')
+				if err != nil {
+					return
+				}
+				if tt.answer {
+					_, _ = io.WriteString(c, frame)
+				}
+				_, _ = io.Copy(io.Discard, r)
+			}))
+			conn := dialPortConn(t, ts, agentRequest+statFrame)
+			r := bufio.NewReader(conn)
+			readStatus101(t, r)
+			if tt.answer {
+				if _, err := r.ReadString('\n'); err != nil {
+					t.Fatalf("read the answer: %v", err)
+				}
+			}
+			_ = conn.Close()
+			if !tt.answer {
+				await(t, mgr.unreachable, "a relay whose silkd never answered is not noted")
+				return
+			}
+			select {
+			case id := <-mgr.unreachable:
+				t.Errorf("noted %s, whose silkd answered", id)
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
+	}
+}
+
 func TestRelayEndsWhenItsClaimIsFenced(t *testing.T) {
 	relayWithFence := func(fenced <-chan struct{}) (net.Conn, *bufio.Reader) {
 		guest := pipeDialer(func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
@@ -180,6 +224,17 @@ func TestWakeGuestLogsAClientCancelBelowError(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `"level":"error"`) {
 		t.Errorf("a cancel that did not come from the client logged %q, want an error record", logs.String())
+	}
+
+	logs.Reset()
+	leftWaiting := func(ctx context.Context, _ string, _ pool.Cred) (string, <-chan struct{}, func(), error) {
+		return "", nil, nil, ctx.Err()
+	}
+	if _, _, _, ok := srv.wakeGuest(canceled, httptest.NewRecorder(), "sb_1", pool.Cred{Token: "tok"}, leftWaiting); ok {
+		t.Fatal("a wake the client left succeeded")
+	}
+	if logs.String() != "" {
+		t.Errorf("a client that left during the wake logged %q, want nothing at info level", logs.String())
 	}
 }
 
