@@ -165,7 +165,7 @@ func (s *Source) apply(next func(cur *set) (map[string]tenants.TenantRecord, err
 	if err != nil {
 		return tenants.Change{}, fmt.Errorf("encode tenants file: %w", err)
 	}
-	if err := utils.WriteFileSync(s.path, raw, 0o600); err != nil {
+	if err := utils.WriteFileSync(s.path, raw); err != nil {
 		return tenants.Change{}, fmt.Errorf("persist tenants: %w", err)
 	}
 	s.set.Store(updated)

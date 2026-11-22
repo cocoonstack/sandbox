@@ -171,6 +171,63 @@ func TestAnUnrelatedEvictionKeepsALookupCacheable(t *testing.T) {
 	}
 }
 
+func TestAListenerReconnectFlushesWhatItMissed(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	_, schema, _ := strings.CutLast(dsn, "=")
+	a, b := openIn(t, dsn), openIn(t, dsn+"&application_name="+schema)
+	ctx := t.Context()
+	if _, err := a.Put(ctx, tenantstest.Record("u-1", "gone", 0, "")); err != nil {
+		t.Fatalf("put on a: %v", err)
+	}
+	if !tenantstest.Eventually(t, func() bool {
+		r, err := b.Resolve(ctx, tenantstest.Sum("gone"))
+		_, p := b.Peek("u-1")
+		return err == nil && r.Name == "u-1" && p == tenants.Present
+	}) {
+		t.Fatal("b never cached a's tenant")
+	}
+	admin, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = admin.Close(context.Background()) }()
+	const listener = "SELECT pid, backend_start FROM pg_stat_activity WHERE application_name = $1 AND query LIKE 'LISTEN %'"
+	var pid int
+	var started time.Time
+	if err = admin.QueryRow(ctx, listener, schema).Scan(&pid, &started); err != nil {
+		t.Fatalf("find b's listener: %v", err)
+	}
+	if _, err = admin.Exec(ctx, "SELECT pg_terminate_backend($1)", pid); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if !tenantstest.Eventually(t, func() bool {
+		return errors.Is(admin.QueryRow(ctx, "SELECT 1 FROM pg_stat_activity WHERE pid = $1", pid).Scan(new(int)), pgx.ErrNoRows)
+	}) {
+		t.Fatal("b's listener outlived its termination")
+	}
+	if _, err = a.Delete(ctx, "u-1"); err != nil {
+		t.Fatalf("delete on a: %v", err)
+	}
+	var deleted time.Time
+	if err = admin.QueryRow(ctx, "SELECT now()").Scan(&deleted); err != nil {
+		t.Fatalf("now: %v", err)
+	}
+	if !tenantstest.Eventually(t, func() bool {
+		return admin.QueryRow(ctx, listener, schema).Scan(&pid, &started) == nil
+	}) {
+		t.Fatal("b's listener never reconnected")
+	}
+	if !started.After(deleted) {
+		t.Fatalf("b's listener reconnected at %v, before the delete at %v", started, deleted)
+	}
+	if !tenantstest.Eventually(t, func() bool {
+		_, err := b.Resolve(ctx, tenantstest.Sum("gone"))
+		return errors.Is(err, tenants.ErrUnknown)
+	}) {
+		t.Error("b still authenticates a tenant deleted while its listener was down")
+	}
+}
+
 func openIn(t *testing.T, dsn string) *Source {
 	t.Helper()
 	s, err := Open(t.Context(), dsn)

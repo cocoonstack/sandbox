@@ -31,8 +31,11 @@ func TestCloneFileRefusesExistingDestination(t *testing.T) {
 }
 
 func TestCloneFileRemovesFailedDestination(t *testing.T) {
-	dst := filepath.Join(t.TempDir(), "dst")
-	if err := CloneFile(t.TempDir(), dst); err == nil {
+	src, dst := t.TempDir(), filepath.Join(t.TempDir(), "dst")
+	if err := os.WriteFile(filepath.Join(src, "entry"), nil, 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := CloneFile(src, dst); err == nil {
 		t.Fatal("CloneFile copied a directory")
 	}
 	if _, err := os.Stat(dst); err == nil {
