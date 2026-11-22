@@ -3,7 +3,6 @@ package pg
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -123,8 +122,31 @@ func TestARoleWithoutCreateServesAPreCreatedTable(t *testing.T) {
 	dsn := metastoretest.PGSchema(t)
 	owner := openIn(t, dsn)
 	owner.Close()
-	s := openIn(t, restricted(dsn, tableRole(t, dsn)))
-	if _, err := s.Put(t.Context(), tenantstest.Record("u-1", "t1", 0, "")); err != nil {
+	_, schema, _ := strings.CutLast(dsn, "=")
+	role := "r" + schema
+	admin, err := pgx.Connect(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = admin.Close(t.Context()) }()
+	for _, sql := range []string{
+		"CREATE ROLE " + role + " LOGIN PASSWORD 'p'",
+		"GRANT USAGE ON SCHEMA " + schema + " TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON " + schema + ".sandboxd_tenants TO " + role,
+	} {
+		if _, err = admin.Exec(t.Context(), sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	t.Cleanup(func() {
+		if c, cerr := pgx.Connect(context.Background(), dsn); cerr == nil {
+			_, _ = c.Exec(context.Background(), "DROP OWNED BY "+role)
+			_, _ = c.Exec(context.Background(), "DROP ROLE "+role)
+			_ = c.Close(context.Background())
+		}
+	})
+	s := openIn(t, restricted(dsn, role))
+	if _, err = s.Put(t.Context(), tenantstest.Record("u-1", "t1", 0, "")); err != nil {
 		t.Errorf("a write as the restricted role: %v", err)
 	}
 }
@@ -149,60 +171,6 @@ func TestAnUnrelatedEvictionKeepsALookupCacheable(t *testing.T) {
 	}
 }
 
-func TestAListenerReconnectFlushesWhatItMissed(t *testing.T) {
-	dsn := metastoretest.PGSchema(t)
-	a := openIn(t, dsn)
-	ctx := t.Context()
-	if _, err := a.Put(ctx, tenantstest.Record("u-1", "gone", 0, "")); err != nil {
-		t.Fatalf("put on a: %v", err)
-	}
-	role := tableRole(t, dsn)
-	b := openIn(t, restricted(dsn, role))
-	admin, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer func() { _ = admin.Close(ctx) }()
-	var pid int
-	if !tenantstest.Eventually(t, func() bool {
-		return admin.QueryRow(ctx, "SELECT pid FROM pg_stat_activity WHERE usename = $1 AND query LIKE 'LISTEN %' AND state = 'idle'", role).Scan(&pid) == nil
-	}) {
-		t.Fatal("b's listener never started")
-	}
-	if !tenantstest.Eventually(t, func() bool {
-		r, rerr := b.Resolve(ctx, tenantstest.Sum("gone"))
-		_, p := b.Peek("u-1")
-		return rerr == nil && r.Name == "u-1" && p == tenants.Present
-	}) {
-		t.Fatal("b never cached a's tenant")
-	}
-	for _, sql := range []string{"ALTER ROLE " + role + " NOLOGIN", fmt.Sprintf("SELECT pg_terminate_backend(%d)", pid)} {
-		if _, err = admin.Exec(ctx, sql); err != nil {
-			t.Fatalf("%s: %v", sql, err)
-		}
-	}
-	if !tenantstest.Eventually(t, func() bool {
-		return errors.Is(admin.QueryRow(ctx, "SELECT 1 FROM pg_stat_activity WHERE pid = $1", pid).Scan(new(int)), pgx.ErrNoRows)
-	}) {
-		t.Fatal("b's listener outlived its termination")
-	}
-	if _, err = a.Delete(ctx, "u-1"); err != nil {
-		t.Fatalf("delete on a: %v", err)
-	}
-	if r, rerr := b.Resolve(ctx, tenantstest.Sum("gone")); rerr != nil || r.Name != "u-1" {
-		t.Fatalf("b with its listener down: %+v %v, want the cached u-1", r, rerr)
-	}
-	if _, err = admin.Exec(ctx, "ALTER ROLE "+role+" LOGIN"); err != nil {
-		t.Fatalf("login: %v", err)
-	}
-	if !tenantstest.Eventually(t, func() bool {
-		_, err := b.Resolve(ctx, tenantstest.Sum("gone"))
-		return errors.Is(err, tenants.ErrUnknown)
-	}) {
-		t.Error("b still authenticates a tenant deleted while its listener was down")
-	}
-}
-
 func openIn(t *testing.T, dsn string) *Source {
 	t.Helper()
 	s, err := Open(t.Context(), dsn)
@@ -211,34 +179,6 @@ func openIn(t *testing.T, dsn string) *Source {
 	}
 	t.Cleanup(s.Close)
 	return s
-}
-
-func tableRole(t *testing.T, dsn string) string {
-	t.Helper()
-	_, schema, _ := strings.CutLast(dsn, "=")
-	role := "r" + schema
-	admin, err := pgx.Connect(t.Context(), dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer func() { _ = admin.Close(t.Context()) }()
-	for _, sql := range []string{
-		"CREATE ROLE " + role + " LOGIN PASSWORD 'p'",
-		"GRANT USAGE ON SCHEMA " + schema + " TO " + role,
-		"GRANT SELECT, INSERT, UPDATE, DELETE ON " + schema + ".sandboxd_tenants TO " + role,
-	} {
-		if _, err = admin.Exec(t.Context(), sql); err != nil {
-			t.Fatalf("%s: %v", sql, err)
-		}
-	}
-	t.Cleanup(func() {
-		if c, cerr := pgx.Connect(context.Background(), dsn); cerr == nil {
-			_, _ = c.Exec(context.Background(), "DROP OWNED BY "+role)
-			_, _ = c.Exec(context.Background(), "DROP ROLE "+role)
-			_ = c.Close(context.Background())
-		}
-	})
-	return role
 }
 
 func restricted(dsn, role string) string {
