@@ -1,6 +1,7 @@
 package pg
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -165,30 +166,50 @@ func TestAssignFindsAFreeAddressTheSharedCursorSkipped(t *testing.T) {
 	}
 }
 
-func TestConcurrentSweepsHandOutEveryAddressTheCursorSkips(t *testing.T) {
-	dsn := metastoretest.PGSchema(t)
-	nodes := []*Store{openSubnet(t, dsn, "c1", "240.0.0.0/28", time.Hour), openSubnet(t, dsn, "c1", "240.0.0.0/28", time.Hour)}
-	if _, err := nodes[0].pool.Exec(t.Context(), `ALTER SEQUENCE sandboxd_tun_addrs_cursor INCREMENT BY 2 RESTART WITH 0 MINVALUE 0`); err != nil {
+func TestASweepThatLosesItsAddressTakesTheNextFreeOne(t *testing.T) {
+	ctx := t.Context()
+	s := openSubnet(t, metastoretest.PGSchema(t), "c1", "240.0.0.0/29", time.Hour)
+	for _, n := range []uint64{0, 2, 3, 4} {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO sandboxd_tun_addrs (cell, address, claim) VALUES ($1, $2, $3)`, s.cell, tunnet.HostAt(s.subnet, n).String(), fmt.Sprintf("held_%d", n)); err != nil {
+			t.Fatalf("hold: %v", err)
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `ALTER SEQUENCE sandboxd_tun_addrs_cursor INCREMENT BY 2 RESTART WITH 0 MINVALUE 0`); err != nil {
 		t.Fatalf("skew the cursor: %v", err)
 	}
-	var mu sync.Mutex
-	got := map[netip.Addr]bool{}
-	var wg sync.WaitGroup
-	for i := range 14 {
-		wg.Go(func() {
-			addr, err := nodes[i%2].Assign(t.Context(), fmt.Sprintf("sb_%d", i))
-			if err != nil {
-				t.Errorf("assign sb_%d: %v", i, err)
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			got[addr] = true
-		})
+	racer, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
 	}
-	wg.Wait()
-	if len(got) != 14 {
-		t.Errorf("handed out %d distinct addresses, want all 14", len(got))
+	defer func() { _ = racer.Rollback(context.Background()) }()
+	if _, err = racer.Exec(ctx, `INSERT INTO sandboxd_tun_addrs (cell, address, claim) VALUES ($1, $2, 'racer')`, s.cell, tunnet.HostAt(s.subnet, 1).String()); err != nil {
+		t.Fatalf("race: %v", err)
+	}
+	type result struct {
+		addr netip.Addr
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		addr, aerr := s.Assign(ctx, "sb_last")
+		done <- result{addr, aerr}
+	}()
+	blocked := false
+	for range 100 {
+		if err = s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'WITH held%')`).Scan(&blocked); err != nil || blocked {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatalf("the sweep never waited on the racer's address: %v", err)
+	}
+	if err = racer.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	want := tunnet.HostAt(s.subnet, 5)
+	if got := <-done; got.err != nil || got.addr != want {
+		t.Errorf("assign after the racer took %s = %s %v, want %s", tunnet.HostAt(s.subnet, 1), got.addr, got.err, want)
 	}
 }
 

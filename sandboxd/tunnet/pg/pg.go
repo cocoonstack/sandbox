@@ -72,7 +72,7 @@ func Open(ctx context.Context, dsn, cell string, subnet netip.Prefix, reuse time
 	return &Store{pool: pool, cell: cell, subnet: subnet.Masked(), reuse: reuse}, nil
 }
 
-// Assign returns claimID's active address, or claims the first candidate from the shared cursor that is free and past its reuse window, walking one window per round trip and sweeping the subnet once when the walk finds it full.
+// Assign returns claimID's active address, or claims the first candidate from the shared cursor that is free and past its reuse window, walking one window per round trip and sweeping the subnet when the walk finds it full.
 func (s *Store) Assign(ctx context.Context, claimID string) (netip.Addr, error) {
 	hosts := int64(1)<<(32-s.subnet.Bits()) - 2
 	var walked int64
