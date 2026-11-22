@@ -64,6 +64,11 @@ func WriteFileSync(path string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
+	if err = f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return fmt.Errorf("chmod %s: %w", f.Name(), err)
+	}
 	return ReplaceFileSync(f, path, data)
 }
 
