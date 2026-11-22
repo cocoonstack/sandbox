@@ -820,7 +820,7 @@ re-send it when `restarts` moves.
 
 A claim settles at most once every 30 s: notices inside that gap become one
 settle when it ends, and the door waits a second after each notice it takes.
-A notice that makes a claim pending is journaled before its ack, and the
+A notice that makes a live claim pending is journaled before its ack, and the
 claim stays pending until a settle or a cold boot commits; a later notice for
 a claim already pending changes only the boot id in memory. If that journal
 write fails, the ack still goes out and the notice is lost if sandboxd stops
@@ -834,9 +834,12 @@ During a liveness cold boot, one finished at startup, or the wake of a failed
 claim, the old door still listens, and its notice only records the boot. A
 wake that cold-boots (from hibernation or the archive) has no door listening
 yet, so the VMM refuses its notice. A move-in serves the boot door before it
-starts the moved guest. A notice for a released claim is dropped; one that
-lands while a release's journal write is still in flight is kept on the
-claim. The remount skips a volume that is detaching after a failed detach and
+starts the moved guest. A notice for a released claim is dropped. One that
+lands while a release's or a reap's journal write is still in flight is kept
+on the claim in memory and acked before anything journals it; a release that
+rolls back writes it with the restored claim and queues its settle, and a
+reap that rolls back writes it and leaves it to the claim's next arm. The
+remount skips a volume that is detaching after a failed detach and
 leaves it to the detach retry. Guest root can dial the door, so forged
 notices cost their own claim one settle per gap. Journal writes come from
 three places: one when the claim turns pending, one per settle commit, and
@@ -847,8 +850,9 @@ remount writes to the root disk, and the mount then hides what it wrote.
 silkd sends one notice per boot and never retries it. A reboot that
 coincides with a sandboxd restart, or with a host transition of the same
 claim (a hibernate or wake, a move, a release or reap that rolls back), may
-go unseen: that one reboot behaves as before this change, with the env and
-mounts missing and restarts unmoved, until the next reboot sandboxd sees.
+go unseen, or, in rare cases, count once too high: an unseen reboot behaves
+as before this change, with the env and mounts missing and restarts unmoved,
+until the next reboot sandboxd sees.
 
 ### Maintenance
 
