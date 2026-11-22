@@ -811,11 +811,12 @@ not skip the volumes. It records no usage event, since the VMM never exited, and
 spends no restart budget. A guest that does not answer the settle's probe
 moves nothing: the notice stays pending and the settle is tried again up to
 3 times, 30 s apart, then waits for the claim's next arm or notice. After the
-retries are used up, an arm gets one more try and a fresh notice gets one try
-and 3 retries again. A guest that answers but whose env write or remount fails
-logs an error and stays running, and `restarts` still moves. The
-instance-metadata document is not restored, so re-send it when `restarts`
-moves.
+retries are used up, an arm gets one more try while the same sandboxd keeps
+the count, a claim adopted after a restart starts again at one try and 3
+retries, and a fresh notice gets one try and 3 retries. A guest that answers
+but whose env write or remount fails logs an error and stays running, and
+`restarts` still moves. The instance-metadata document is not restored, so
+re-send it when `restarts` moves.
 
 A claim settles at most once every 30 s: notices inside that gap become one
 settle when it ends, and the door waits a second after each notice it takes.
@@ -833,11 +834,15 @@ During a liveness cold boot, one finished at startup, or the wake of a failed
 claim, the old door still
 listens, and its notice only records the boot. A wake that cold-boots (from
 hibernation or the archive) has no door listening yet, so the VMM refuses its
-notice. A notice for a released claim is dropped. The remount skips a volume
-that is detaching after a failed detach and leaves it to the detach retry.
-Guest root can dial the door, so forged notices cost their own claim one
-settle per gap and one journal write each time the claim turns pending, plus
-one journal write per volume whose remount fails.
+notice. A move-in serves the boot door before it starts the moved guest, so a
+guest that was mid-boot when it moved is heard. A notice for a released claim
+is dropped; one that lands while a release's journal write is still in flight
+is kept on the claim, and a release that rolls back settles it. The remount
+skips a volume that is detaching after a failed detach and leaves it to the
+detach retry. Guest root can dial the door, so forged notices cost their own
+claim one settle per gap. Journal writes come from three places: one when
+the claim turns pending, one per settle commit, and one per volume whose
+remount fails; writes that land close together can share one commit.
 silkd sends one notice per boot and never retries it, so a reboot while
 sandboxd is down or restarting goes unseen. A guest service that writes into
 a volume's mount path before the remount writes to the root disk, and the
