@@ -90,6 +90,9 @@ func (s *Store) Assign(ctx context.Context, claimID string) (netip.Addr, error) 
 			return netip.Addr{}, down(err)
 		}
 	}
+	if hosts <= assignTries*assignWindow {
+		return s.sweep(ctx, claimID, hosts)
+	}
 	return netip.Addr{}, tunnet.ErrNoAddress
 }
 

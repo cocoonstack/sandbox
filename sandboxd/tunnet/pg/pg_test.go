@@ -1,7 +1,6 @@
 package pg
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -181,7 +180,7 @@ func TestASweepThatLosesItsAddressTakesTheNextFreeOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer func() { _ = racer.Rollback(context.Background()) }()
+	defer func() { _ = racer.Rollback(ctx) }()
 	var racerPID int
 	if err = racer.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&racerPID); err != nil {
 		t.Fatalf("racer pid: %v", err)
