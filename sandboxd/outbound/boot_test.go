@@ -115,11 +115,13 @@ func TestABootDoorDisarmedWhileItBindsIsClosedNotPublished(t *testing.T) {
 	sb := outboundtest.VsockSandbox(t, "sb_boot_race", testKey)
 	path := engine.BootSocketPath(sb.VsockSocket)
 
-	h.armBoot(t.Context(), sb, func(path string) (*net.UnixListener, error) {
+	if err := h.armProxy(t.Context(), sb, func(path string) (*net.UnixListener, error) {
 		ln, err := listenUnix(path)
 		h.Disarm(sb.ID, true)
 		return ln, err
-	})
+	}); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
 
 	if conn, err := net.Dial("unix", path); err == nil {
 		_ = conn.Close()
@@ -134,7 +136,9 @@ func TestABootDoorThatCannotBindLeavesNoEntry(t *testing.T) {
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, nil), nil)
 	sb := outboundtest.VsockSandbox(t, "sb_boot_nobind", testKey)
 
-	h.armBoot(t.Context(), sb, func(string) (*net.UnixListener, error) { return nil, errors.New("bind refused") })
+	if err := h.armProxy(t.Context(), sb, func(string) (*net.UnixListener, error) { return nil, errors.New("bind refused") }); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
 
 	if n := bootEntries(h, sb.ID); n != 0 {
 		t.Errorf("%d boot door entries left after a failed bind, want none", n)

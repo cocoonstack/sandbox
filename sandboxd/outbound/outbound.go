@@ -125,84 +125,7 @@ func (h *Host) Arm(ctx context.Context, sb *types.Sandbox) error {
 
 // ArmProxy opens the boot door, then serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
 func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
-	h.o.Armed(ctx, sb)
-	h.armBoot(ctx, sb, listenUnix)
-	h.mu.Lock()
-	d, displaced := h.prebound[sb.VMName], h.doors[sb.ID]
-	delete(h.prebound, sb.VMName)
-	h.doors[sb.ID] = nil
-	stale := displaced.takeTun()
-	h.mu.Unlock()
-	if displaced != nil {
-		displaced.close()
-		h.dropTun(stale)
-	}
-	v := h.o.View()
-	policy, ok := v.Resolve(sb)
-	if !ok || sb.VsockSocket == "" {
-		h.dropReservation(h.doors, sb.ID)
-		if d != nil {
-			d.close()
-		}
-		if sb.TunAddr.IsValid() && sb.VsockSocket != "" {
-			h.tunDown(sb.ID, sb.VsockSocket)
-		}
-		return nil
-	}
-	id, tenant := sb.ID, sb.Tenant
-	evCtx := context.WithoutCancel(ctx)
-	ca := h.o.CA
-	if !v.Intercepts(sb.PolicyKey()) {
-		ca = nil
-	}
-	c := newClaim(h, sb, v, policy)
-	proxy := egress.New(c, c, ca, c, func(ev egress.Event) { h.o.Record(evCtx, id, tenant, ev) }, sb)
-	if h.o.RecordEnds {
-		proxy.RecordEnds()
-	}
-	if h.o.NoRxSplice {
-		proxy.NoRxSplice()
-	}
-	if v.usageBytes {
-		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
-	}
-	if d != nil && (!d.serves(policy) || d.listen() != nil) {
-		d.close()
-		d = nil
-	}
-	if d == nil {
-		var err error
-		if d, err = bindDoors(sb.VsockSocket, policy, listenUnix); err != nil {
-			h.dropReservation(h.doors, id)
-			return err
-		}
-	}
-	d.srv = proxy.Server()
-	d.proxy = proxy
-	if v.usageEvery > 0 {
-		proxy.ReportEvery(v.usageEvery)
-	}
-	if d.dns != nil {
-		d.resolver = newResolver(evCtx, h, c.fenced, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
-	}
-	h.mu.Lock()
-	published := publishReserved(h.doors, id, d)
-	h.mu.Unlock()
-	if !published {
-		d.close()
-		return nil
-	}
-	h.SetEgressLimit(sb)
-	go func() { _ = d.srv.Serve(d.ln) }()
-	if d.socks != nil {
-		go proxy.ServeSOCKS(evCtx, d.socks)
-	}
-	if d.resolver != nil {
-		go d.resolver.serve(d.dns, false)
-		go d.resolver.serve(d.dnsGram, true)
-	}
-	h.armTun(ctx, sb, d, v, c)
-	return nil
+	return h.armProxy(ctx, sb, listenUnix)
 }
 
 // Prebind binds a warm VM's doors at refill, so a claim only has to start serving them.
@@ -429,6 +352,89 @@ func (h *Host) RefuseInterceptOn(old, next *View, served func(types.PoolKey) boo
 			return fmt.Errorf("pool %s turns intercept on, but its guests do not trust the CA: use a new pool key", key.Template)
 		}
 	}
+	return nil
+}
+
+func (h *Host) armProxy(ctx context.Context, sb *types.Sandbox, bindBoot unixBinder) error {
+	h.o.Armed(ctx, sb)
+	h.mu.Lock()
+	boot, displacedBoot := h.takeBootLocked(sb)
+	d, displaced := h.prebound[sb.VMName], h.doors[sb.ID]
+	delete(h.prebound, sb.VMName)
+	h.doors[sb.ID] = nil
+	stale := displaced.takeTun()
+	h.mu.Unlock()
+	closeBoot(displacedBoot)
+	if displaced != nil {
+		displaced.close()
+		h.dropTun(stale)
+	}
+	h.armBoot(ctx, sb, boot, bindBoot)
+	v := h.o.View()
+	policy, ok := v.Resolve(sb)
+	if !ok || sb.VsockSocket == "" {
+		h.dropReservation(h.doors, sb.ID)
+		if d != nil {
+			d.close()
+		}
+		if sb.TunAddr.IsValid() && sb.VsockSocket != "" {
+			h.tunDown(sb.ID, sb.VsockSocket)
+		}
+		return nil
+	}
+	id, tenant := sb.ID, sb.Tenant
+	evCtx := context.WithoutCancel(ctx)
+	ca := h.o.CA
+	if !v.Intercepts(sb.PolicyKey()) {
+		ca = nil
+	}
+	c := newClaim(h, sb, v, policy)
+	proxy := egress.New(c, c, ca, c, func(ev egress.Event) { h.o.Record(evCtx, id, tenant, ev) }, sb)
+	if h.o.RecordEnds {
+		proxy.RecordEnds()
+	}
+	if h.o.NoRxSplice {
+		proxy.NoRxSplice()
+	}
+	if v.usageBytes {
+		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
+	}
+	if d != nil && (!d.serves(policy) || d.listen() != nil) {
+		d.close()
+		d = nil
+	}
+	if d == nil {
+		var err error
+		if d, err = bindDoors(sb.VsockSocket, policy, listenUnix); err != nil {
+			h.dropReservation(h.doors, id)
+			return err
+		}
+	}
+	d.srv = proxy.Server()
+	d.proxy = proxy
+	if v.usageEvery > 0 {
+		proxy.ReportEvery(v.usageEvery)
+	}
+	if d.dns != nil {
+		d.resolver = newResolver(evCtx, h, c.fenced, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
+	}
+	h.mu.Lock()
+	published := publishReserved(h.doors, id, d)
+	h.mu.Unlock()
+	if !published {
+		d.close()
+		return nil
+	}
+	h.SetEgressLimit(sb)
+	go func() { _ = d.srv.Serve(d.ln) }()
+	if d.socks != nil {
+		go proxy.ServeSOCKS(evCtx, d.socks)
+	}
+	if d.resolver != nil {
+		go d.resolver.serve(d.dns, false)
+		go d.resolver.serve(d.dnsGram, true)
+	}
+	h.armTun(ctx, sb, d, v, c)
 	return nil
 }
 

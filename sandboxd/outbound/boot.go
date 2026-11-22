@@ -23,8 +23,7 @@ const (
 	bootAck           = "\n"
 )
 
-func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox, bind unixBinder) {
-	ln := h.takeBoot(sb)
+func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListener, bind unixBinder) {
 	if sb.VsockSocket == "" {
 		closeBoot(ln)
 		return
@@ -48,18 +47,15 @@ func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox, bind unixBinder) 
 	go h.serveBoot(context.WithoutCancel(ctx), sb, ln)
 }
 
-func (h *Host) takeBoot(sb *types.Sandbox) *net.UnixListener {
-	h.mu.Lock()
-	ln, displaced := h.preboots[sb.VMName], h.boots[sb.ID]
+func (h *Host) takeBootLocked(sb *types.Sandbox) (ln, displaced *net.UnixListener) {
+	ln, displaced = h.preboots[sb.VMName], h.boots[sb.ID]
 	delete(h.preboots, sb.VMName)
 	if sb.VsockSocket == "" {
 		delete(h.boots, sb.ID)
 	} else {
 		h.boots[sb.ID] = nil
 	}
-	h.mu.Unlock()
-	closeBoot(displaced)
-	return ln
+	return ln, displaced
 }
 
 func (h *Host) publishBoot(id string, ln *net.UnixListener) bool {

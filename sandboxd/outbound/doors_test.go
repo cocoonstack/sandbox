@@ -172,32 +172,59 @@ func TestARearmWithNoPolicyLeftClosesTheDoor(t *testing.T) {
 }
 
 func TestAClaimDisarmedWhileItsDoorsBindGetsNoDoors(t *testing.T) {
-	var h *Host
-	var disarmed atomic.Bool
-	h = newHost(t, &fakeEngine{}, poolConfig(testKey, egPolicy), func(o *Options) {
-		view := o.View
-		o.View = func() *View {
-			if h != nil && disarmed.CompareAndSwap(false, true) {
-				h.Disarm("sb_doors_race", true)
+	for _, tt := range []struct {
+		name     string
+		inBoot   bool
+		inEgress bool
+	}{
+		{name: "during the boot bind", inBoot: true},
+		{name: "after the boot door published", inEgress: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var h *Host
+			var disarmed atomic.Bool
+			id := "sb_doors_race"
+			disarm := func() {
+				if disarmed.CompareAndSwap(false, true) {
+					h.Disarm(id, true)
+				}
 			}
-			return view()
-		}
-	})
-	sb := outboundtest.VsockSandbox(t, "sb_doors_race", testKey)
+			h = newHost(t, &fakeEngine{}, poolConfig(testKey, egPolicy), func(o *Options) {
+				view := o.View
+				o.View = func() *View {
+					if h != nil && tt.inEgress {
+						disarm()
+					}
+					return view()
+				}
+			})
+			sb := outboundtest.VsockSandbox(t, id, testKey)
 
-	if err := h.ArmProxy(t.Context(), sb); err != nil {
-		t.Fatalf("arm proxy: %v", err)
-	}
+			err := h.armProxy(t.Context(), sb, func(path string) (*net.UnixListener, error) {
+				ln, err := listenUnix(path)
+				if tt.inBoot {
+					disarm()
+				}
+				return ln, err
+			})
+			if err != nil {
+				t.Fatalf("arm proxy: %v", err)
+			}
 
-	if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
-		_ = conn.Close()
-		t.Error("the egress door of a claim disarmed mid-arm still accepts")
-	}
-	h.mu.Lock()
-	_, kept := h.doors[sb.ID]
-	h.mu.Unlock()
-	if kept {
-		t.Error("the claim disarmed mid-arm still has a doors entry")
+			for _, path := range []string{engine.BootSocketPath(sb.VsockSocket), engine.EgressSocketPath(sb.VsockSocket)} {
+				if conn, err := net.Dial("unix", path); err == nil {
+					_ = conn.Close()
+					t.Errorf("%s accepts for a claim disarmed mid-arm", path)
+				}
+			}
+			h.mu.Lock()
+			_, keptDoors := h.doors[id]
+			_, keptBoot := h.boots[id]
+			h.mu.Unlock()
+			if keptDoors || keptBoot {
+				t.Errorf("entries left: doors %v, boot %v, want none", keptDoors, keptBoot)
+			}
+		})
 	}
 }
 

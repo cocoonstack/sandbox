@@ -137,6 +137,7 @@ var (
 	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
+	errRemountFailed = errors.New("remount after a guest reboot")
 
 	errFencedReplicating = fmt.Errorf("%w: node lease lost", ErrQuota)
 	errMemoryLow         = fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)

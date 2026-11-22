@@ -64,68 +64,60 @@ func TestAGuestRebootRewritesTheEnvRemountsVolumesAndMovesRestartsOnce(t *testin
 	}
 }
 
-func TestARebootSettleRacingAReleaseNeverMountsAfterIt(t *testing.T) {
-	eng := newFakeEngine()
-	m := newVolumeManager(t, eng, liveCatalog(t))
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	entered, hold := make(chan struct{}), make(chan struct{})
-	eng.mu.Lock()
-	eng.liveMountHook = func() {
-		close(entered)
-		<-hold
-	}
-	eng.mu.Unlock()
+func TestARemountAReleaseCatchesBeforeItsGuestCallIsCanceled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newVolumeManager(t, eng, liveCatalog(t))
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		entered, hold := make(chan struct{}), make(chan struct{})
+		eng.liveMountHook = func() {
+			close(entered)
+			<-hold
+		}
 
-	m.Rebooted(t.Context(), sb, "boot-2")
-	<-entered
-	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	close(hold)
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.volumeRuns[sb] == nil
+		m.Rebooted(t.Context(), sb, "boot-2")
+		<-entered
+		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		close(hold)
+		synctest.Wait()
+
+		if got := liveMountsOf(eng); len(got) != 0 {
+			t.Errorf("live mounts %v, want the release to cancel the remount it caught before its guest call", got)
+		}
 	})
-
-	eng.mu.Lock()
-	defer eng.mu.Unlock()
-	if len(eng.liveMounts) != 0 {
-		t.Errorf("live mounts %v, want the release to cancel the remount it raced", eng.liveMounts)
-	}
 }
 
-func TestARebootSettleRacingAReleaseBetweenTheProbeAndTheMountNeverMounts(t *testing.T) {
-	eng := newFakeEngine()
-	stall := make(chan struct{})
-	m := newVolumeManager(t, eng, liveCatalog(t))
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	probes := eng.probeCount()
-	eng.mu.Lock()
-	eng.probeStall = stall
-	eng.mu.Unlock()
+func TestARemountAfterAReleaseDuringItsProbeIsSkipped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.liveMountIgnoresCtx = true
+		m := newVolumeManager(t, eng, liveCatalog(t))
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		stall := make(chan struct{})
+		eng.mu.Lock()
+		eng.probeStall = stall
+		eng.mu.Unlock()
 
-	m.Rebooted(t.Context(), sb, "boot-2")
-	waitFor(t, func() bool { return eng.probeCount() > probes })
-	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	close(stall)
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.volumeRuns[sb] == nil
+		m.Rebooted(t.Context(), sb, "boot-2")
+		synctest.Wait()
+		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		close(stall)
+		synctest.Wait()
+
+		if got := liveMountsOf(eng); len(got) != 0 {
+			t.Errorf("live mounts %v, want the run check to skip a remount the release overtook", got)
+		}
 	})
-
-	if got := liveMountsOf(eng); len(got) != 0 {
-		t.Errorf("live mounts %v, want no mount after the release that landed before it", got)
-	}
 }
 
 func TestANoticeWhileAWakeIsInFlightSettlesWhenTheWakeEnds(t *testing.T) {
@@ -170,42 +162,15 @@ func TestARebootSettleTriesEveryVolumeWhenOneFails(t *testing.T) {
 	if got := liveMountsOf(eng); !slices.Equal(got, []string{"other:/volumes/other"}) {
 		t.Errorf("live mounts %v, want the second volume mounted after the first failed", got)
 	}
-	want := map[string]types.VolumePhase{"data": types.VolumePending, "other": types.VolumeAttached}
+	want := map[string]string{"data": volumeRemountFailed, "other": ""}
 	for name, st := range volumeStates(t, m, sb.ID) {
-		if st.State != want[name] || (name == "data") != (st.Error != "") {
-			t.Errorf("volume %s state %+v, want %s with an error only on the failed remount", name, st, want[name])
+		if st.State != types.VolumeAttached || st.Error != want[name] {
+			t.Errorf("volume %s state %+v, want attached with error %q", name, st, want[name])
 		}
 		delete(want, name)
 	}
 	if len(want) != 0 {
 		t.Errorf("no state for %v", want)
-	}
-}
-
-func TestAVolumeWhoseRemountFailedMountsAgainOnAPutOfTheSameSet(t *testing.T) {
-	eng := newFakeEngine()
-	eng.liveMountErrFor = "data"
-	m := newVolumeManager(t, eng, liveCatalog(t))
-	set := []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: set})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	m.Rebooted(t.Context(), sb, "boot-2")
-	waitJournaledReboot(t, m, sb.ID, 1, "boot-2")
-	eng.mu.Lock()
-	eng.liveMountErrFor = ""
-	eng.mu.Unlock()
-
-	if _, err := m.SetVolumes(t.Context(), sb.ID, "", set); err != nil {
-		t.Fatalf("put the same set: %v", err)
-	}
-
-	if st := volumeStates(t, m, sb.ID)["data"]; st.State != types.VolumeAttached || st.Error != "" {
-		t.Errorf("state %+v, want the volume attached with its error cleared", st)
-	}
-	if got := liveMountsOf(eng); !slices.Equal(got, []string{"data:/volumes/data"}) {
-		t.Errorf("live mounts %v, want the put to mount the volume again", got)
 	}
 }
 
@@ -337,6 +302,26 @@ func TestANoticeTakenDuringASettleStaysPendingForTheNextOne(t *testing.T) {
 			t.Errorf("journal %+v, want the overlapped notice settled at the gap end", row)
 		}
 	})
+}
+
+func TestANoticeWhoseJournalWriteFailsIsStillTaken(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.probeStall = stall
+	eng.mu.Unlock()
+	breakStore(t, m)
+
+	m.Rebooted(t.Context(), sb, "boot-2")
+
+	if !rebootPending(m, sb) {
+		t.Error("a notice whose journal write failed was not kept")
+	}
+	healStore(t, m)
+	close(stall)
+	waitFor(t, func() bool { return restartsOf(m, sb.ID) == 1 && !rebootPending(m, sb) })
 }
 
 func TestAPendingRebootSettlesAfterARestart(t *testing.T) {
@@ -654,6 +639,12 @@ func rebootQueued(m *Manager, sb *types.Sandbox) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.reboots[sb].queued
+}
+
+func rebootPending(m *Manager, sb *types.Sandbox) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return sb.RebootPending
 }
 
 func waitJournaledReboot(t *testing.T, m *Manager, id string, restarts int, bootID string) {
