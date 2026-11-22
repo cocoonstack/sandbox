@@ -376,6 +376,9 @@ func (m *Manager) settlePendingSnap(ctx context.Context, sb *types.Sandbox) (ado
 			m.recordHibernate(ctx, sb)
 		}
 		sb.PendingSnap = ""
+		if !exists && sb.RebootPending {
+			m.queueRebootLocked(ctx, sb)
+		}
 		js = m.store.set(sb)
 	}
 	m.mu.Unlock()

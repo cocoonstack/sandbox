@@ -671,6 +671,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			m.rollbackClaim(ctx, sbs, true)
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
+		m.disarmIfReleased(sb)
 	}
 	return nil
 }

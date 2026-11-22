@@ -21,17 +21,37 @@ type rebootGate struct {
 
 func (m *Manager) Rebooted(ctx context.Context, sb *types.Sandbox, bootID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var js claimSnapshot
+	pending := false
 	switch {
 	case m.claimed[sb.ID] != sb || bootID == sb.BootID:
 	case sb.ColdBooting:
 		sb.BootID = bootID
-	case runningShaped(sb):
-		sb.BootID = bootID
-		m.queueRebootLocked(ctx, sb)
+	default:
+		sb.BootID, sb.RebootPending, pending = bootID, true, true
+		js = m.store.set(sb)
+		if runningShaped(sb) {
+			m.queueRebootLocked(ctx, sb)
+		}
+	}
+	m.mu.Unlock()
+	logger := log.WithFunc("pool.Rebooted")
+	if !pending {
+		logger.Debugf(ctx, "no reboot settle for the boot notice %s of %s", bootID, sb.ID)
 		return
 	}
-	log.WithFunc("pool.Rebooted").Debugf(ctx, "no reboot settle for the boot notice %s of %s", bootID, sb.ID)
+	if err := m.store.commit(js); err != nil {
+		m.store.recommit(ctx, js)
+		logger.Errorf(ctx, err, "persist the reboot notice of %s", sb.ID)
+	}
+}
+
+func (m *Manager) rebootArmed(ctx context.Context, sb *types.Sandbox) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if sb.RebootPending && m.claimed[sb.ID] == sb {
+		m.queueRebootLocked(ctx, sb)
+	}
 }
 
 func (m *Manager) queueRebootLocked(ctx context.Context, sb *types.Sandbox) {
@@ -67,6 +87,7 @@ func (m *Manager) settleReboot(ctx context.Context, sb *types.Sandbox) {
 	if live, _ = m.commitIfLive(ctx, sb, func() {
 		sb.Restarts++
 		sb.RestartedAt = time.Now()
+		sb.RebootPending = m.reboots[sb].queued
 	}); !live {
 		return
 	}
@@ -86,12 +107,12 @@ func (m *Manager) restoreRebootedGuest(ctx context.Context, sb *types.Sandbox, r
 	if err := m.eng.Probe(ctx, sock, claimProbeTimeout); err != nil {
 		return 0, err
 	}
+	var errs []error
 	if env.HasGuest() {
 		if err := m.eng.WriteGuestEnv(ctx, sock, env.GuestFile()); err != nil {
-			return 0, fmt.Errorf("write env: %w", err)
+			errs = append(errs, fmt.Errorf("write env: %w", err))
 		}
 	}
-	var errs []error
 	for _, v := range mounts {
 		if err := m.checkVolumeRun(ctx, sb, run); err != nil {
 			return len(mounts), errors.Join(append(errs, err)...)
@@ -99,7 +120,7 @@ func (m *Manager) restoreRebootedGuest(ctx context.Context, sb *types.Sandbox, r
 		err := m.eng.MountLiveVolume(ctx, sock, v.Name, v.Mount, v.RW())
 		if err != nil {
 			m.recordVolumeError(sb, run, v.Name, err)
-			errs = append(errs, fmt.Errorf("mount volume %q: %w", v.Name, err))
+			errs = append(errs, fmt.Errorf("mount volume %q: %w", v.Name, err), m.commitVolumeApplied(ctx, sb, run, v, false))
 			continue
 		}
 		m.clearVolumeError(sb, run, v.Name)

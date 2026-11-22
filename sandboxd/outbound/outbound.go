@@ -60,6 +60,7 @@ type Options struct {
 	EgressLimit func(sb *types.Sandbox) types.EgressLimit
 	Fenced      func() bool
 	Rebooted    func(ctx context.Context, sb *types.Sandbox, bootID string)
+	Armed       func(ctx context.Context, sb *types.Sandbox)
 	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
 	Dial        egress.DialFunc
 	Verdict     VerdictFunc
@@ -124,7 +125,8 @@ func (h *Host) Arm(ctx context.Context, sb *types.Sandbox) error {
 
 // ArmProxy opens the boot door, then serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
 func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
-	h.armBoot(ctx, sb)
+	h.o.Armed(ctx, sb)
+	h.armBoot(ctx, sb, listenUnix)
 	h.mu.Lock()
 	d, displaced := h.prebound[sb.VMName], h.doors[sb.ID]
 	delete(h.prebound, sb.VMName)
@@ -138,7 +140,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	v := h.o.View()
 	policy, ok := v.Resolve(sb)
 	if !ok || sb.VsockSocket == "" {
-		h.dropDoorsReservation(sb.ID)
+		h.dropReservation(h.doors, sb.ID)
 		if d != nil {
 			d.close()
 		}
@@ -171,7 +173,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	if d == nil {
 		var err error
 		if d, err = bindDoors(sb.VsockSocket, policy, listenUnix); err != nil {
-			h.dropDoorsReservation(id)
+			h.dropReservation(h.doors, id)
 			return err
 		}
 	}
@@ -430,11 +432,11 @@ func (h *Host) RefuseInterceptOn(old, next *View, served func(types.PoolKey) boo
 	return nil
 }
 
-func (h *Host) dropDoorsReservation(id string) {
+func (h *Host) dropReservation[V any](slots map[string]*V, id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if d, reserved := h.doors[id]; reserved && d == nil {
-		delete(h.doors, id)
+	if v, reserved := slots[id]; reserved && v == nil {
+		delete(slots, id)
 	}
 }
 

@@ -90,9 +90,9 @@ func TestARearmReplacesTheBootDoorAndClosePreboundDropsAnUnclaimedOne(t *testing
 }
 
 func TestTheBootDoorPacesTheNoticesItHandsOn(t *testing.T) {
-	notices := make(chan string, 4)
+	handed := make(chan time.Time, 4)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, nil), func(o *Options) {
-		o.Rebooted = func(_ context.Context, _ *types.Sandbox, bootID string) { notices <- bootID }
+		o.Rebooted = func(context.Context, *types.Sandbox, string) { handed <- time.Now() }
 	})
 	sb := outboundtest.VsockSandbox(t, "sb_boot_pace", testKey)
 	t.Cleanup(func() { h.Disarm(sb.ID, true) })
@@ -102,40 +102,52 @@ func TestTheBootDoorPacesTheNoticesItHandsOn(t *testing.T) {
 	path := engine.BootSocketPath(sb.VsockSocket)
 
 	sendBootNotice(t, path, "5f1c0e2a-77b1-4c43-9d2e-0a1b2c3d4e5f\n")
-	start := time.Now()
-	ack := sendBootNotice(t, path, "0f6a3c1e-2b4d-4e8f-9a7c-5d3e1b2a4c6f\n")
-	took := time.Since(start)
+	sendBootNotice(t, path, "0f6a3c1e-2b4d-4e8f-9a7c-5d3e1b2a4c6f\n")
 
-	if ack != "\n" || len(notices) != 2 {
-		t.Fatalf("ack %q, %d notices, want both taken", ack, len(notices))
-	}
-	if took < bootNoticeGap*9/10 {
-		t.Errorf("second notice answered after %v, want the door to wait about %v", took, bootNoticeGap)
+	first, second := <-handed, <-handed
+	if gap := second.Sub(first); gap < bootNoticeGap*9/10 {
+		t.Errorf("Rebooted ran %v apart, want the door to hold the second notice about %v", gap, bootNoticeGap)
 	}
 }
 
 func TestABootDoorDisarmedWhileItBindsIsClosedNotPublished(t *testing.T) {
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, nil), nil)
 	sb := outboundtest.VsockSandbox(t, "sb_boot_race", testKey)
-	if ln := h.takeBoot(sb); ln != nil {
-		t.Fatalf("took %v, want no prebound door", ln.Addr())
-	}
-	h.Disarm(sb.ID, true)
-	ln, err := listenUnix(engine.BootSocketPath(sb.VsockSocket))
-	if err != nil {
-		t.Fatalf("bind: %v", err)
-	}
-	defer closeBoot(ln)
+	path := engine.BootSocketPath(sb.VsockSocket)
 
-	if h.publishBoot(sb.ID, ln) {
-		t.Error("a door whose claim was disarmed while it bound was published")
+	h.armBoot(t.Context(), sb, func(path string) (*net.UnixListener, error) {
+		ln, err := listenUnix(path)
+		h.Disarm(sb.ID, true)
+		return ln, err
+	})
+
+	if conn, err := net.Dial("unix", path); err == nil {
+		_ = conn.Close()
+		t.Error("the boot door of a claim disarmed while it bound accepts")
 	}
+	if n := bootEntries(h, sb.ID); n != 0 {
+		t.Errorf("%d boot door entries left, want none", n)
+	}
+}
+
+func TestABootDoorThatCannotBindLeavesNoEntry(t *testing.T) {
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, nil), nil)
+	sb := outboundtest.VsockSandbox(t, "sb_boot_nobind", testKey)
+
+	h.armBoot(t.Context(), sb, func(string) (*net.UnixListener, error) { return nil, errors.New("bind refused") })
+
+	if n := bootEntries(h, sb.ID); n != 0 {
+		t.Errorf("%d boot door entries left after a failed bind, want none", n)
+	}
+}
+
+func bootEntries(h *Host, id string) int {
 	h.mu.Lock()
-	_, kept := h.boots[sb.ID]
-	h.mu.Unlock()
-	if kept {
-		t.Error("the disarmed claim still has a boot door entry")
+	defer h.mu.Unlock()
+	if _, ok := h.boots[id]; ok {
+		return 1
 	}
+	return 0
 }
 
 func prebootCount(h *Host) int {
