@@ -342,13 +342,15 @@ handle from `Lookup` can renew. An archived sandbox is refused with a 409
 ```go
 err := sb.Hibernate(ctx)   // snapshot + stop atomically; memory freed
 // ... the next call that reaches the guest wakes it transparently:
-out, err := sb.Exec(ctx, "cat", "/tmp/state")   // sessions & memory intact
+out, err := sb.Exec(ctx, "cat", "/tmp/state")   // sessions & memory usually intact
 ```
 
 `Hibernate` snapshots the VM and stops it in one atomic step — nothing the
 guest does can fall between the snapshot point and the stop. The handle
 stays valid: the first call that reaches the guest restores the VM (adding
-roughly a restore's latency, tens of milliseconds on bare metal). On a node at
+roughly a restore's latency, tens of milliseconds on bare metal). A guest that
+does not answer the restore is cold-booted from its disk instead, and its
+memory, processes and sessions are lost. On a node at
 [`max_running`](deploy.md#configuration), or below `disk_reserve`, that call returns a 429 `*APIError`,
 which the SDK does not retry, and the sandbox stays hibernated. The TTL
 keeps running — a hibernated sandbox is still reaped at its deadline, so

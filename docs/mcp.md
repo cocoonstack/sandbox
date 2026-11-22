@@ -39,7 +39,7 @@ in the guest, which can hold its reply up to 5 s past the cap.
 | `checkpoint` | capture full state without stopping, with an optional `name`; returns a `checkpoint_id` that can be branched repeatedly |
 | `branch_checkpoint` | claim a fresh sandbox from a checkpoint's captured moment; it lives one hour |
 | `list_checkpoints` / `delete_checkpoint` | checkpoint lifecycle |
-| `hibernate` | snapshot + stop, freeing memory while keeping id, files and processes; the next call that reaches the guest wakes it |
+| `hibernate` | snapshot + stop, freeing memory while keeping id and files; the next call that reaches the guest wakes it, usually with its processes intact, but a guest that does not answer the restore is cold-booted from disk and loses them; on a reader pool, `read_file` and `list_dir` read without waking it |
 | `promote` | publish the sandbox as the template `template_name` on its node; re-promoting replaces it |
 | `release` | destroy the sandbox and its files; the session forgets the id, so a second release is rejected as unknown |
 | `node_info` | warm pools, promoted templates, live claims, drain state, capacity and mesh peers; needs the root or operator token |
