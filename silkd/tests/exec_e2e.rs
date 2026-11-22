@@ -3,6 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
@@ -12,6 +14,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use silkd::server::State;
+#[cfg(target_os = "linux")]
+use silkd::sysutil;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
@@ -265,6 +269,9 @@ async fn kill_ends_the_whole_command_not_only_its_shell() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn kill_after_the_leader_exited_ends_its_background_group() {
+    if lacks_group_signal() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("child");
     let state = Arc::new(State::new());
@@ -281,6 +288,9 @@ async fn kill_after_the_leader_exited_ends_its_background_group() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_client_gone_after_the_leader_exited_ends_its_background_group() {
+    if lacks_group_signal() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("child");
     let state = Arc::new(State::new());
@@ -551,6 +561,27 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         read < 256 * 1024,
         "the forked child read {read} bytes: stdin kept flowing after its client left"
     );
+}
+
+#[cfg(target_os = "linux")]
+fn lacks_group_signal() -> bool {
+    let lacks = sysutil::pidfd_open(std::process::id()).is_none_or(|me| {
+        // SAFETY: a null siginfo makes the kernel build the default one, so no pointer is read.
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                me.as_raw_fd(),
+                0,
+                std::ptr::null::<libc::siginfo_t>(),
+                libc::PIDFD_SIGNAL_PROCESS_GROUP,
+            )
+        };
+        rc < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL)
+    });
+    if lacks {
+        eprintln!("skipped: the kernel lacks PIDFD_SIGNAL_PROCESS_GROUP");
+    }
+    lacks
 }
 
 #[cfg(target_os = "linux")]
