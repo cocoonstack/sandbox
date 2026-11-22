@@ -208,7 +208,8 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 // quiesceVolumes unmounts a claim's writable mounts in reverse; an unclean unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: heldVolumes(sb)}
-	if !slices.ContainsFunc(sb.Volumes, needsUnmount) {
+	unmounts := slices.Concat(volumeDifference(sb.VolumesWant, sb.Volumes), sb.Volumes)
+	if !slices.ContainsFunc(unmounts, needsUnmount) {
 		return td
 	}
 	catalog := m.catalogSnapshot()
@@ -216,7 +217,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	// Cancellation-immune like removal: a caller hanging up must not skip the flush.
 	ctx = context.WithoutCancel(ctx)
 	stuck := false
-	for _, volume := range slices.Backward(sb.Volumes) {
+	for _, volume := range slices.Backward(unmounts) {
 		if !needsUnmount(volume) {
 			continue
 		}
