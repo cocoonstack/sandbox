@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17.12-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
         env:
           POSTGRES_PASSWORD: sbxci
         ports:
@@ -62,7 +62,7 @@ jobs:
       - name: Check the release config
         uses: goreleaser/goreleaser-action@v7.3.0
         with:
-          version: v2.18.2
+          version: v2.20.3
           args: check
 
       - name: Lint
@@ -93,7 +93,7 @@ jobs:
           AWS_ACCESS_KEY_ID: sbxci
           AWS_SECRET_ACCESS_KEY: sbxcisecret
         run: |
-          docker run -d --name s3 -p 127.0.0.1:8333:8333 chrislusf/seaweedfs:4.54 server -s3 -ip.bind=0.0.0.0
+          docker run -d --name s3 -p 127.0.0.1:8333:8333 chrislusf/seaweedfs:4.54@sha256:4b42c212543a0acd4c0e675215ecdcaf62a186ef98def76c7e12701871222d15 server -s3 -ip.bind=0.0.0.0
           for _ in $(seq 60); do
             docker exec s3 sh -c 'echo "s3.bucket.create -name sbx-checkpoints" | timeout 10 weed shell' 2>&1 | grep -q 'created bucket' && break
             sleep 1
@@ -132,8 +132,8 @@ jobs:
         env:
           CADDY_BIN: ${{ runner.temp }}/caddy
         run: |
-          curl -fsSL --retry 3 https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz -o "$RUNNER_TEMP/caddy.tar.gz"
-          printf '%s  %s\n' '8220d1f013b6f27510247b2360c9e0ca9f018feebd82515f07635318b34ff9777ccc8fd0b6e6f2486ce3a33fe389fbb7db12d05baa474f4587509fb4f5ebf1c9' "$RUNNER_TEMP/caddy.tar.gz" | sha512sum -c -
+          curl -fsSL --retry 3 https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_linux_amd64.tar.gz -o "$RUNNER_TEMP/caddy.tar.gz"
+          printf '%s  %s\n' '0e85544340290a16ce4bfb76fe7d65e9de1bf3a6e67f5ccfff30b30d27ea4c73e078077b7bf3e58ae60b6b12e44327705287059c775bca5782e8ee85ea7edd75' "$RUNNER_TEMP/caddy.tar.gz" | sha512sum -c -
           tar -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP" caddy
           GOWORK=off go test -race -count=1 -run TestCaddyTLSCluster -timeout 60s -v . | tee "$RUNNER_TEMP/caddy-test.log"
           ! grep -- '--- SKIP' "$RUNNER_TEMP/caddy-test.log"

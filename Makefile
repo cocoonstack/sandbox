@@ -19,7 +19,7 @@ GO_OSES := linux darwin
 
 LOCALBIN ?= $(shell pwd)/bin
 
-GOLANGCILINT_VERSION ?= v2.13.2
+GOLANGCILINT_VERSION ?= v2.15.0
 GO_VERSION := $(shell sed -n 's/^go //p' sandboxd/go.mod)
 GOLANGCILINT_ROOT := $(LOCALBIN)/golangci-lint-$(GOLANGCILINT_VERSION)
 GOLANGCILINT := $(GOLANGCILINT_ROOT)/golangci-lint

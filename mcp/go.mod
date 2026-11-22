@@ -1,6 +1,6 @@
 module github.com/cocoonstack/sandbox/mcp
 
-go 1.27.1
+go 1.27.4
 
 require (
 	github.com/cocoonstack/sandbox/sdk/go v0.0.0

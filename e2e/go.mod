@@ -1,6 +1,6 @@
 module github.com/cocoonstack/sandbox/e2e
 
-go 1.27.1
+go 1.27.4
 
 require (
 	github.com/cocoonstack/sandbox/protocol/wire v0.1.36

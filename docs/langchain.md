@@ -8,8 +8,7 @@ needs `langgraph`, which the package does not pull in).
 from cocoonsandbox_langchain import CocoonToolkit
 from langgraph.prebuilt import create_react_agent
 
-with CocoonToolkit("10.0.0.5:7777", api_token="...",
-                   template="ghcr.io/cocoonstack/sandbox/rt:24.04") as kit:
+with CocoonToolkit("10.0.0.5:7777", api_token="...", template="ghcr.io/cocoonstack/sandbox/rt:24.04") as kit:
     agent = create_react_agent(model, kit.get_tools())
     agent.invoke({"messages": [("user", "clone the repo and run the tests")]})
 ```
