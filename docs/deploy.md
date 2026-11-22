@@ -831,22 +831,24 @@ next start, on a wake, when a move-in commits, or when a failed capture or
 an abandoned hibernate leaves the guest running. A cold boot clears the
 pending notice, since it restores the guest itself, and counts one restart.
 During a liveness cold boot, one finished at startup, or the wake of a failed
-claim, the old door still
-listens, and its notice only records the boot. A wake that cold-boots (from
-hibernation or the archive) has no door listening yet, so the VMM refuses its
-notice. A move-in serves the boot door before it starts the moved guest, so a
-guest that was mid-boot when it moved is heard. A notice for a released claim
-is dropped; one that lands while a release's journal write is still in flight
-is kept on the claim, and a release that rolls back settles it. The remount
-skips a volume that is detaching after a failed detach and leaves it to the
-detach retry. Guest root can dial the door, so forged notices cost their own
-claim one settle per gap. Journal writes come from three places: one when
-the claim turns pending, one per settle commit, and one per volume whose
-remount fails; writes that land close together can share one commit.
-silkd sends one notice per boot and never retries it, so a reboot while
-sandboxd is down or restarting goes unseen. A guest service that writes into
-a volume's mount path before the remount writes to the root disk, and the
-mount then hides what it wrote.
+claim, the old door still listens, and its notice only records the boot. A
+wake that cold-boots (from hibernation or the archive) has no door listening
+yet, so the VMM refuses its notice. A move-in serves the boot door before it
+starts the moved guest. A notice for a released claim is dropped; one that
+lands while a release's journal write is still in flight is kept on the
+claim. The remount skips a volume that is detaching after a failed detach and
+leaves it to the detach retry. Guest root can dial the door, so forged
+notices cost their own claim one settle per gap. Journal writes come from
+three places: one when the claim turns pending, one per settle commit, and
+one per volume whose remount fails; writes that land close together can share
+one commit. A guest service that writes into a volume's mount path before the
+remount writes to the root disk, and the mount then hides what it wrote.
+
+silkd sends one notice per boot and never retries it. A reboot that
+coincides with a sandboxd restart, or with a host transition of the same
+claim (a hibernate or wake, a move, a release or reap that rolls back), may
+go unseen: that one reboot behaves as before this change, with the env and
+mounts missing and restarts unmoved, until the next reboot sandboxd sees.
 
 ### Maintenance
 
