@@ -844,11 +844,10 @@ func TestARolledBackReleaseCountsAnEarlierQueuedSettleOnce(t *testing.T) {
 			t.Fatalf("heal store: %v", err)
 		}
 		m.finishVolumeRun(sb, held)
-		time.Sleep(3 * rebootSettleGap)
 		synctest.Wait()
 
 		if got := restartsOf(m, sb.ID); got != 2 || rebootPending(m, sb) {
-			t.Errorf("restarts %d, pending %v, want the settle queued before the release and the rollback's settle to count once", got, rebootPending(m, sb))
+			t.Errorf("restarts %d, pending %v right after the rollback, want its settle run before the earlier queued one was due", got, rebootPending(m, sb))
 		}
 		rows, loadErr := newClaimStore(filepath.Dir(m.store.path), false).load()
 		if loadErr != nil {
@@ -856,6 +855,11 @@ func TestARolledBackReleaseCountsAnEarlierQueuedSettleOnce(t *testing.T) {
 		}
 		if row := rows[sb.ID]; row == nil || row.BootID != "boot-3" {
 			t.Errorf("journal %+v, want the notice delivered during the release recorded", row)
+		}
+		time.Sleep(3 * rebootSettleGap)
+		synctest.Wait()
+		if got := restartsOf(m, sb.ID); got != 2 {
+			t.Errorf("restarts %d, want the settle queued before the release to count nothing more", got)
 		}
 	})
 }
@@ -932,13 +936,18 @@ func TestABurstOfNoticesInsideTheGapSettlesOnceWhenTheGapEnds(t *testing.T) {
 		if got := restartsOf(m, sb.ID); got != 2 {
 			t.Fatalf("restarts %d after the gap, want the burst settled once", got)
 		}
-		time.Sleep(2 * rebootSettleGap)
+		if row := journaled(t, m)[sb.ID]; row == nil || row.BootID != "boot-6" {
+			t.Errorf("journal %+v, want the last boot of the burst recorded", row)
+		}
+		m.Rebooted(t.Context(), sb, "boot-7")
 		synctest.Wait()
 		if got := restartsOf(m, sb.ID); got != 2 {
-			t.Errorf("restarts %d, want no settle past the one the burst earned", got)
+			t.Errorf("restarts %d, want a notice right after the burst's settle to wait out its own gap", got)
 		}
-		if row := journaled(t, m)[sb.ID]; row == nil || row.BootID != "boot-6" {
-			t.Errorf("journal %+v, want the last boot recorded", row)
+		time.Sleep(2 * rebootSettleGap)
+		synctest.Wait()
+		if got := restartsOf(m, sb.ID); got != 3 {
+			t.Errorf("restarts %d, want the late notice settled once its gap ended", got)
 		}
 	})
 }
