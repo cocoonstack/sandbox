@@ -21,6 +21,7 @@ async fn main() {
         session::IDLE_TTL,
         session::REAP_INTERVAL,
     ));
+    // no lane gate needed: an unwired host refuses the per-conn vsock dial.
     tokio::spawn(relay(
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, net_egress::LOOPBACK_PORT),
         net_egress::HOST_VSOCK_PORT,
