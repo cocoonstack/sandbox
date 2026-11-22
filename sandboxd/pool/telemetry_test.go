@@ -553,18 +553,17 @@ func TestSandboxPagesListEveryLiveClaimOnceWhileClaimsComeAndGo(t *testing.T) {
 		}
 		delete(live, id)
 	}
-	var addedBelow, addedAbove bool
-	for range 64 {
-		if addedBelow && addedAbove {
-			break
-		}
+	for addedBelow, addedAbove := false, false; !addedBelow || !addedAbove; {
 		sb := mustClaim(t, m, testKey)
+		below := sb.ID < cursor
+		if below && addedBelow || !below && addedAbove {
+			if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("release %s: %v", sb.ID, err)
+			}
+			continue
+		}
 		live[sb.ID] = sb
-		addedBelow = addedBelow || sb.ID < cursor
-		addedAbove = addedAbove || sb.ID > cursor
-	}
-	if !addedBelow || !addedAbove {
-		t.Fatalf("no new claim landed on each side of the cursor %s", cursor)
+		addedBelow, addedAbove = addedBelow || below, addedAbove || !below
 	}
 
 	want := slices.Clone(seen)
