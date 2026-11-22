@@ -176,26 +176,26 @@ func TestAListenerReconnectFlushesWhatItMissed(t *testing.T) {
 	_, schema, _ := strings.CutLast(dsn, "=")
 	a, b := openIn(t, dsn), openIn(t, dsn+"&application_name="+schema)
 	ctx := t.Context()
-	if _, err := a.Put(ctx, tenantstest.Record("u-1", "gone", 0, "")); err != nil {
-		t.Fatalf("put on a: %v", err)
-	}
-	if !tenantstest.Eventually(t, func() bool {
-		r, err := b.Resolve(ctx, tenantstest.Sum("gone"))
-		_, p := b.Peek("u-1")
-		return err == nil && r.Name == "u-1" && p == tenants.Present
-	}) {
-		t.Fatal("b never cached a's tenant")
-	}
 	admin, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer func() { _ = admin.Close(context.Background()) }()
-	const listener = "SELECT pid, backend_start FROM pg_stat_activity WHERE application_name = $1 AND query LIKE 'LISTEN %'"
+	defer func() { _ = admin.Close(ctx) }()
+	const listener = "SELECT pid, backend_start FROM pg_stat_activity WHERE application_name = $1 AND query LIKE 'LISTEN %' AND state = 'idle'"
 	var pid int
 	var started time.Time
-	if err = admin.QueryRow(ctx, listener, schema).Scan(&pid, &started); err != nil {
-		t.Fatalf("find b's listener: %v", err)
+	if !tenantstest.Eventually(t, func() bool { return admin.QueryRow(ctx, listener, schema).Scan(&pid, &started) == nil }) {
+		t.Fatal("b's listener never started")
+	}
+	if _, err = a.Put(ctx, tenantstest.Record("u-1", "gone", 0, "")); err != nil {
+		t.Fatalf("put on a: %v", err)
+	}
+	if !tenantstest.Eventually(t, func() bool {
+		r, rerr := b.Resolve(ctx, tenantstest.Sum("gone"))
+		_, p := b.Peek("u-1")
+		return rerr == nil && r.Name == "u-1" && p == tenants.Present
+	}) {
+		t.Fatal("b never cached a's tenant")
 	}
 	if _, err = admin.Exec(ctx, "SELECT pg_terminate_backend($1)", pid); err != nil {
 		t.Fatalf("terminate: %v", err)
