@@ -1,10 +1,14 @@
 """Regression tests for the SDK error-surface hardening."""
 
 import base64
+import contextlib
 import errno
 import io
 import json
+import pathlib
+import queue
 import socket
+import ssl
 import threading
 import time
 
@@ -24,6 +28,8 @@ from cocoonsandbox import (
 from cocoonsandbox.conn import Conn, dial_agent, remaining_timeout
 from cocoonsandbox.frames import BULK_CHUNK
 from conftest import sandbox_at, wait_until
+
+TLS_PEM = pathlib.Path(__file__).with_name("tls.pem")
 
 
 def test_dial_agent_rejects_control_chars_in_identity():
@@ -245,20 +251,15 @@ def test_a_send_stalled_past_the_socket_timeout_raises_sandbox_timeout():
         theirs.close()
 
 
-def test_a_send_whose_bytes_keep_flowing_outlives_the_socket_timeout():
-    ours, theirs = socket.socketpair()
-    ours.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
-    theirs.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+@pytest.mark.parametrize("tls", [False, True], ids=["plain", "tls"])
+def test_a_send_whose_bytes_keep_flowing_outlives_the_socket_timeout(tls):
+    ours, theirs = slow_pair()
+    if tls:
+        ours, theirs = tls_pair(ours, theirs)
     conn = Conn(ours, ours.makefile("rb"))
     conn.settimeout(0.2)
     received = bytearray()
-
-    def drain_slowly() -> None:
-        while not received.endswith(b"\n") and (chunk := theirs.recv(64 * 1024)):
-            received.extend(chunk)
-            time.sleep(0.01)
-
-    reader = threading.Thread(target=drain_slowly, daemon=True)
+    reader = threading.Thread(target=drain_slowly, args=(theirs, received), daemon=True)
     reader.start()
     try:
         conn.send("data", data=bytes(2 << 20))
@@ -267,6 +268,21 @@ def test_a_send_whose_bytes_keep_flowing_outlives_the_socket_timeout():
         conn.close()
         theirs.close()
     assert len(base64.b64decode(json.loads(received)["data"])) == 2 << 20
+
+
+def test_a_run_deadline_bounds_a_slowly_drained_request(monkeypatch):
+    ours, theirs = slow_pair()
+    sb = sandbox_at("127.0.0.1:1", keep_alive=0)
+    monkeypatch.setattr(sb, "_dial", lambda deadline=None: Conn(ours, ours.makefile("rb")))
+    threading.Thread(target=drain_slowly, args=(theirs, bytearray()), daemon=True).start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(SandboxTimeout):
+            sb.run(["true"], env={"BIG": "x" * (8 << 20)}, timeout=0.3)
+        elapsed = time.monotonic() - started
+    finally:
+        theirs.close()
+    assert elapsed < 0.6, elapsed
 
 
 def test_a_send_cut_by_tcp_keepalive_stays_a_protocol_error():
@@ -285,6 +301,31 @@ class KeepaliveExpiredReader:
 
     def close(self) -> None:
         pass
+
+
+def slow_pair() -> tuple[socket.socket, socket.socket]:
+    ours, theirs = socket.socketpair()
+    ours.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
+    theirs.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+    return ours, theirs
+
+
+def tls_pair(ours: socket.socket, theirs: socket.socket) -> tuple[ssl.SSLSocket, ssl.SSLSocket]:
+    server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server.load_cert_chain(TLS_PEM)
+    client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client.check_hostname = False
+    client.verify_mode = ssl.CERT_NONE
+    accepted: queue.Queue[ssl.SSLSocket] = queue.Queue()
+    threading.Thread(target=lambda: accepted.put(server.wrap_socket(theirs, server_side=True)), daemon=True).start()
+    return client.wrap_socket(ours), accepted.get(timeout=5)
+
+
+def drain_slowly(sock: socket.socket, received: bytearray) -> None:
+    with contextlib.suppress(OSError):
+        while not received.endswith(b"\n") and (chunk := sock.recv(64 * 1024)):
+            received.extend(chunk)
+            time.sleep(0.01)
 
 
 @pytest.fixture

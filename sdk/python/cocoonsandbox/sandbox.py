@@ -502,7 +502,7 @@ class Sandbox:
         if conn is None:
             conn = self._dial(deadline)
         try:
-            conn.settimeout(remaining_timeout(self._client.timeout, deadline, "agent request"))
+            conn.settimeout(remaining_timeout(self._client.timeout, deadline, "agent request"), deadline)
             conn.send(op, **fields)
             if unbounded or deadline is not None:
                 conn.settimeout(None)
