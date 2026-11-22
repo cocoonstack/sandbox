@@ -1,4 +1,4 @@
-//! Boot notice: once per guest boot, before silkd serves, the host learns the boot id and restores what /run lost.
+//! Boot notice: once per guest boot, before silkd serves, the host learns the boot id so it can write the claim env and mount the volumes again.
 
 use std::io;
 use std::path::Path;
@@ -62,7 +62,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("silkd.booted");
         let boot_id = dir.path().join("boot_id");
-        std::fs::write(&boot_id, "5f1c-boot\n").unwrap();
+        std::fs::write(&boot_id, "5f1c0e2a-77b1-4c43-9d2e-0a1b2c3d4e5f\n").unwrap();
         let dials = &AtomicUsize::new(0);
         let mut heard = Vec::new();
         for _ in 0..2 {
@@ -78,7 +78,13 @@ mod tests {
         }
         assert_eq!(
             heard,
-            [(true, Some("5f1c-boot".to_string())), (false, None)]
+            [
+                (
+                    true,
+                    Some("5f1c0e2a-77b1-4c43-9d2e-0a1b2c3d4e5f".to_string())
+                ),
+                (false, None)
+            ]
         );
         assert_eq!(dials.load(Ordering::Relaxed), 1);
 
@@ -91,7 +97,10 @@ mod tests {
         .await
         .unwrap();
         assert!(sent);
-        assert_eq!(ack.await.unwrap().as_deref(), Some("5f1c-boot"));
+        assert_eq!(
+            ack.await.unwrap().as_deref(),
+            Some("5f1c0e2a-77b1-4c43-9d2e-0a1b2c3d4e5f")
+        );
     }
 
     #[tokio::test]
@@ -99,13 +108,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("silkd.booted");
         let boot_id = dir.path().join("boot_id");
-        std::fs::write(&boot_id, "5f1c-boot\n").unwrap();
+        std::fs::write(&boot_id, "5f1c0e2a-77b1-4c43-9d2e-0a1b2c3d4e5f\n").unwrap();
         let (guest, host) = tokio::io::duplex(256);
-        drop(host);
+        let peer = tokio::spawn(async move {
+            let mut line = String::new();
+            BufReader::new(host).read_line(&mut line).await.unwrap();
+            line
+        });
         let res = announce(&marker, &boot_id, move || async move {
             Ok::<DuplexStream, std::io::Error>(guest)
         })
         .await;
+        assert_eq!(
+            peer.await.unwrap(),
+            "5f1c0e2a-77b1-4c43-9d2e-0a1b2c3d4e5f\n"
+        );
         assert!(res.is_err());
         assert!(marker.exists());
     }
