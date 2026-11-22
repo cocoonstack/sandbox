@@ -770,6 +770,7 @@ func TestANoticeHeldByAHibernateWhoseIntentFailedSettles(t *testing.T) {
 func TestANoticeBetweenAMoveInStartAndItsProbeReachesTheBootDoor(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
+	t.Cleanup(func() { mc.t.out.Disarm(sb.ID, true) })
 	dest := fakeOf(mc.t)
 	var knockErr error
 	knocked := false
@@ -848,6 +849,13 @@ func TestARolledBackReleaseCountsAnEarlierQueuedSettleOnce(t *testing.T) {
 
 		if got := restartsOf(m, sb.ID); got != 2 || rebootPending(m, sb) {
 			t.Errorf("restarts %d, pending %v, want the settle queued before the release and the rollback's settle to count once", got, rebootPending(m, sb))
+		}
+		rows, err := newClaimStore(filepath.Dir(m.store.path), false).load()
+		if err != nil {
+			t.Fatalf("load journal: %v", err)
+		}
+		if row := rows[sb.ID]; row == nil || row.BootID != "boot-3" {
+			t.Errorf("journal %+v, want the notice delivered during the release recorded", row)
 		}
 	})
 }
