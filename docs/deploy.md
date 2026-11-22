@@ -669,7 +669,8 @@ and port relays that callers open are not in that figure; each holds up to 6
 more, the same way. systemd 240 and newer raise `fs.nr_open` to the kernel's
 maximum at boot; never lower it below 4,096 × the claims that can fill their
 doors at once on the node, which `max_running` bounds when set, plus
-sandboxd's own share.
+sandboxd's own share. Every armed claim and every warm VM also holds one
+descriptor for its [boot door](#guest-reboots), whatever its egress policy.
 
 Each record carries its syslog level, so alerting keys on systemd priority:
 `journalctl -u sandboxd -p err` lists the errors and `-p warning` the
@@ -783,6 +784,75 @@ this project ships; a cloudimg (UEFI) clone boots again without its per-clone
 cidata, and no shipped pool uses one. Without the daemon stream the poll reads
 `cocoon vm list`, whose liveness check needs a cocoon that verifies the VMM's
 PID (cocoonstack/cocoon#274) to never read a recycled PID as a live VMM.
+
+### Guest reboots
+
+A `reboot` inside the guest does not end its VMM: the VMM boots the guest
+again in place, so liveness sees nothing, and the guest comes back with an
+empty `/run`. That loses the claim's env file and every volume mount, while
+each volume's disk stays attached. The egress, SOCKS5, DNS and packet doors
+and port relays keep working, since the VMM and its vsock socket stay, and
+`tun0` asks the host again at boot. At each boot, before it serves, silkd
+sends the kernel's boot id to its claim's boot door (`CID2:2054`, see
+[silkd](silkd.md#boot-notice)). For a running claim whose recorded boot
+differs, sandboxd writes the guest env entries again, mounts each mounted
+volume again (one already mounted at its path from its device is left alone),
+journals the new boot, and moves `restarts` and `restarted_at`. The remount
+runs as a volume change: it waits for a running `PUT` or `PATCH` of the
+claim's volumes, and a release cancels it. A release stops the host's calls
+but not a guest `mount` that has already started, the same limit a live
+`PATCH` has; the dirty marker of a writable volume then stays unless the
+teardown confirms a clean unmount and the VM is removed. A volume whose
+remount fails turns `pending` with a remount error in
+[`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes),
+and a `PUT` of the same set retries the remount. Its hold and dirty marker
+stay, and a release does not unmount or clear it. An env write that fails does
+not skip the volumes. It records no usage event, since the VMM never exited, and
+spends no restart budget. A guest that does not answer the settle's probe
+moves nothing: the notice stays pending and the settle is tried again up to
+3 times, 30 s apart, then waits for the claim's next arm or notice. After the
+retries are used up, an arm gets one more try while the same sandboxd keeps
+the count, a claim adopted after a restart starts again at one try and 3
+retries, and a fresh notice gets one try and 3 retries. A guest that answers
+but whose env write or remount fails logs an error and stays running, and
+`restarts` still moves. The instance-metadata document is not restored, so
+re-send it when `restarts` moves.
+
+A claim settles at most once every 30 s: notices inside that gap become one
+settle when it ends, and the door waits a second after each notice it takes.
+A notice that makes a live claim pending is journaled before its ack, and the
+claim stays pending until a settle or a cold boot commits; a later notice for
+a claim already pending changes only the boot id in memory. If that journal
+write fails, the ack still goes out and the notice is lost if sandboxd stops
+before its retry lands. A notice that reaches a claim mid-capture,
+hibernated, archived or failed, and a settle that has not run by a sandboxd
+restart or a move, run when the claim is served again: at adoption on the
+next start, on a wake, when a move-in commits, or when a failed capture or
+an abandoned hibernate leaves the guest running. A cold boot clears the
+pending notice, since it restores the guest itself, and counts one restart.
+During a liveness cold boot, one finished at startup, or the wake of a failed
+claim, the old door still listens, and its notice only records the boot. A
+wake that cold-boots (from hibernation or the archive) has no door listening
+yet, so the VMM refuses its notice. A move-in serves the boot door before it
+starts the moved guest. A notice for a released claim is dropped. One that
+lands while a release's or a reap's journal write is still in flight is kept
+on the claim in memory and acked before anything journals it; a release that
+rolls back writes it with the restored claim and queues its settle, and a
+reap that rolls back writes it and leaves it to the claim's next arm. The
+remount skips a volume that is detaching after a failed detach and
+leaves it to the detach retry. Guest root can dial the door, so forged
+notices cost their own claim one settle per gap. Journal writes come from
+three places: one when the claim turns pending, one per settle commit, and
+one per volume whose remount fails; writes that land close together can share
+one commit. A guest service that writes into a volume's mount path before the
+remount writes to the root disk, and the mount then hides what it wrote.
+
+silkd sends one notice per boot and never retries it. A reboot that
+coincides with a sandboxd restart, or with a host transition of the same
+claim (a hibernate or wake, a move, a release or reap that rolls back), may
+go unseen, or, in rare cases, count once too high: an unseen reboot behaves
+as before this change, with the env and mounts missing and restarts unmoved,
+until the next reboot sandboxd sees.
 
 ### Maintenance
 

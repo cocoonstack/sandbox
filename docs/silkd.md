@@ -120,9 +120,21 @@ file when a claim with guest entries is made, when its guest entries change,
 and when the same env is sent again; a change to host-only entries never
 touches it. A unit that must follow a change restarts on it, for example from
 a `.path` unit. The file is in the guest's memory, so it survives hibernate
-and archive; a branch, fork child or promoted-template clone whose source had
-guest entries gets its file rewritten at claim with its own claim's entries
-(none for a fork child).
+and archive, and a reboot inside the guest loses it until the host writes it
+again on the [boot notice](#boot-notice); a branch, fork child or
+promoted-template clone whose source had guest entries gets its file rewritten
+at claim with its own claim's entries (none for a fork child).
+
+## Boot notice
+
+Before it serves port 2048, silkd tells the host about a fresh boot. When
+`/run/silkd.booted` is absent it creates it, dials `CID2:2054`, writes the
+kernel's boot id (`/proc/sys/kernel/random/boot_id`) and a newline, and waits
+for one byte back, 2 s at most in all. A refused dial, a timeout or a short
+read is logged to stderr, and silkd serves anyway. The marker is on tmpfs, so
+a silkd restart in the same boot sends nothing and a reboot sends again; a
+clone restores its golden's memory, marker included, and sends nothing. The
+host's side is in [guest reboots](deploy.md#guest-reboots).
 
 ## Limits
 

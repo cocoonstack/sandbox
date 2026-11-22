@@ -77,6 +77,8 @@ type claimDTO struct {
 	MoveOut        *types.MoveOut     `json:"move_out,omitempty"`
 	MoveIn         bool               `json:"move_in,omitzero"`
 	ColdBooting    bool               `json:"cold_booting,omitzero"`
+	BootID         string             `json:"boot_id,omitempty"`
+	RebootPending  bool               `json:"reboot_pending,omitzero"`
 	LastSeen       time.Time          `json:"last_seen,omitzero"`
 }
 
@@ -430,7 +432,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		TunAddr: sb.TunAddr, TunOff: sb.TunOff, TunProfile: sb.TunProfile, TunBytes: sb.TunBytes, EgressLimit: sb.EgressLimit,
 		ArchiveCk: sb.ArchiveCk, ArchiveEpoch: sb.ArchiveEpoch, ArchivePending: sb.ArchivePending, ReplicaCk: sb.ReplicaCk, ReplicaPending: sb.ReplicaPending, ReplicaAt: sb.ReplicaAt, FromCheckpoint: sb.FromCheckpoint, ImageID: sb.ImageID,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed, MoveOut: sb.MoveOut, MoveIn: sb.MoveIn,
-		ColdBooting: sb.ColdBooting,
+		ColdBooting: sb.ColdBooting, BootID: sb.BootID, RebootPending: sb.RebootPending,
 	}
 }
 

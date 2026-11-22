@@ -399,7 +399,7 @@ func (m *Manager) settleColdBootLocked(ctx context.Context, sb *types.Sandbox) e
 			m.renewWokenLeaseLocked(sb)
 			m.recordWake(ctx, sb)
 		}
-		sb.Failed, sb.ColdBooting = "", false
+		sb.Failed, sb.ColdBooting, sb.RebootPending = "", false, false
 		sb.Restarts++
 		sb.RestartedAt = time.Now()
 	})

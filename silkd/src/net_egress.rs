@@ -129,7 +129,7 @@ where
 }
 
 #[cfg(target_os = "linux")]
-async fn dial_host_cloexec(port: u32) -> io::Result<tokio_vsock::VsockStream> {
+pub(crate) async fn dial_host_cloexec(port: u32) -> io::Result<tokio_vsock::VsockStream> {
     let pending = crate::sysutil::watch_fd(crate::sysutil::vsock_connect_start(
         libc::VMADDR_CID_HOST,
         port,

@@ -171,6 +171,106 @@ func TestARearmWithNoPolicyLeftClosesTheDoor(t *testing.T) {
 	}
 }
 
+func TestAClaimDisarmedWhileItsDoorsBindGetsNoDoors(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		inBoot   bool
+		inEgress bool
+	}{
+		{name: "during the boot bind", inBoot: true},
+		{name: "after the boot door published", inEgress: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var h *Host
+			var disarmed atomic.Bool
+			id := "sb_doors_race"
+			disarm := func() {
+				if disarmed.CompareAndSwap(false, true) {
+					h.Disarm(id, true)
+				}
+			}
+			h = newHost(t, &fakeEngine{}, poolConfig(testKey, egPolicy), func(o *Options) {
+				view := o.View
+				o.View = func() *View {
+					if h != nil && tt.inEgress {
+						disarm()
+					}
+					return view()
+				}
+			})
+			sb := outboundtest.VsockSandbox(t, id, testKey)
+
+			err := h.armProxy(t.Context(), sb, func(path string) (*net.UnixListener, error) {
+				ln, err := listenUnix(path)
+				if tt.inBoot {
+					disarm()
+				}
+				return ln, err
+			})
+			if err != nil {
+				t.Fatalf("arm proxy: %v", err)
+			}
+
+			for _, path := range []string{engine.BootSocketPath(sb.VsockSocket), engine.EgressSocketPath(sb.VsockSocket)} {
+				if conn, err := net.Dial("unix", path); err == nil {
+					_ = conn.Close()
+					t.Errorf("%s accepts for a claim disarmed mid-arm", path)
+				}
+			}
+			h.mu.Lock()
+			_, keptDoors := h.doors[id]
+			_, keptBoot := h.boots[id]
+			h.mu.Unlock()
+			if keptDoors || keptBoot {
+				t.Errorf("entries left: doors %v, boot %v, want none", keptDoors, keptBoot)
+			}
+		})
+	}
+}
+
+func TestAReloadDuringAnArmSkipsTheReservedSlot(t *testing.T) {
+	var h *Host
+	var reloaded atomic.Bool
+	h = newHost(t, &fakeEngine{}, poolConfig(testKey, egPolicy), func(o *Options) {
+		view := o.View
+		o.View = func() *View {
+			if h != nil && reloaded.CompareAndSwap(false, true) {
+				h.Reloaded()
+			}
+			return view()
+		}
+	})
+	sb := outboundtest.VsockSandbox(t, "sb_reload_arm", testKey)
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+
+	if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err != nil {
+		t.Errorf("dial after an arm a reload crossed: %v", err)
+	} else {
+		_ = conn.Close()
+	}
+}
+
+func TestAPolicylessArmLeavesNoDoorsEntry(t *testing.T) {
+	h := newHost(t, &fakeEngine{}, &config.Config{}, nil)
+	sb := outboundtest.VsockSandbox(t, "sb_no_policy", testKey)
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+
+	h.mu.Lock()
+	_, kept := h.doors[sb.ID]
+	h.mu.Unlock()
+	if kept {
+		t.Error("a claim with no policy kept a doors entry")
+	}
+}
+
 func TestTheProxyDoorBoundsAnIdleKeepAlive(t *testing.T) {
 	h, _ := armDialingDoor(t, "sb_idle", &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}})
 	h.mu.Lock()

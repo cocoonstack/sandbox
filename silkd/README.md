@@ -17,7 +17,8 @@ Plus three loopback relays over vsock to the host — the HTTP proxy on
 (`src/net_egress.rs`) — the instance-metadata responder on
 `169.254.169.254:80` where an image aliases it (`src/imds.rs`), and the lane
 verdict that decides whether an exec inherits the proxy variables
-(`src/net.rs`).
+(`src/net.rs`). Before it serves, a fresh boot sends its boot id to the host
+once (`src/boot.rs`).
 
 - `src/proto.rs` — frame types + caps; the golden corpus in
   `../protocol/wire/fixtures/v1/` is checked by the Rust, Go, and Python

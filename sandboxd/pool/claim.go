@@ -353,6 +353,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		logger := log.WithFunc("pool.releaseResolved")
 		m.clearMark(ctx, ck)
 		m.store.recommit(ctx, rb)
+		m.rebootArmed(ctx, sb)
 		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
@@ -577,6 +578,7 @@ func (m *Manager) addClaimLocked(sb *types.Sandbox) {
 
 func (m *Manager) dropClaimLocked(sb *types.Sandbox) {
 	delete(m.claimed, sb.ID)
+	delete(m.reboots, sb)
 	if m.claimedVMs[sb.VMName] == sb {
 		delete(m.claimedVMs, sb.VMName)
 	}
@@ -666,12 +668,38 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		})
 	}
 	for _, sb := range sbs {
-		if armErr := m.out.Arm(ctx, sb); armErr != nil {
+		armed, armErr := m.armIfRunning(ctx, sb)
+		if armErr != nil {
 			m.rollbackClaim(ctx, sbs, true)
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
+		if armed {
+			m.disarmIfDropped(sb)
+		}
 	}
 	return nil
+}
+
+func (m *Manager) disarmIfDropped(sb *types.Sandbox) {
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb
+	m.mu.Unlock()
+	if !live {
+		m.out.Disarm(sb.ID, false)
+	}
+}
+
+func (m *Manager) armIfRunning(ctx context.Context, sb *types.Sandbox) (bool, error) {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	m.mu.Lock()
+	running := m.claimed[sb.ID] == sb && runningShaped(sb)
+	m.mu.Unlock()
+	if !running {
+		m.out.ClosePrebound(sb.VMName)
+		return false, nil
+	}
+	return true, m.out.Arm(ctx, sb)
 }
 
 // rollbackClaim unwinds a claim batch: a NIC that cannot be locked is never handed out.

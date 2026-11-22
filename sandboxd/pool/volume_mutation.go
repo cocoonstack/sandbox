@@ -15,6 +15,7 @@ import (
 const (
 	volumeChangeFailed      = "volume change failed; retry the desired target"
 	volumeChangeInterrupted = "volume change interrupted; retry the desired target"
+	volumeRemountFailed     = "remount after a guest reboot failed; PUT the same volume set to retry it"
 
 	volumeMutationTimeout = 30 * time.Second
 )
@@ -403,6 +404,9 @@ func (m *Manager) recordVolumeError(sb *types.Sandbox, run *volumeRun, name stri
 		message := volumeChangeFailed
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			message = volumeChangeInterrupted
+		}
+		if errors.Is(err, errRemountFailed) {
+			message = volumeRemountFailed
 		}
 		if conflict, ok := errors.AsType[*engine.VolumeMountConflict](err); ok {
 			message = conflict.Error()

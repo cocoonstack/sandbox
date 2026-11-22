@@ -407,7 +407,8 @@ when the volume is in both sets, `pending` when desired but not yet confirmed,
 or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
 PUT or PATCH adds a top-level `error` naming the refusal, and the affected
-state may carry its own `error`. `converging` is true only while a request worker is running.
+state may carry its own `error`. `converging` is true while a request worker
+or the remount after a [guest reboot](deploy.md#guest-reboots) is running.
 `pending` with `converging: false` requires an explicit retry; there is no
 background convergence. GET retains the last safe per-volume error for the
 current daemon lifetime. After daemon restart, unfinished states report an
@@ -481,6 +482,18 @@ readers. Release waits up to 30 seconds for each writable volume's unmount, and
 a guest that does not answer within that keeps every remaining marker.
 Attach-only writers have no automatic dirty-marker protection. The caller owns
 mounting, flushing, unmounting, recovery, and fencing before reuse.
+
+After a [reboot inside the guest](deploy.md#guest-reboots) sandboxd mounts each
+mounted volume again; an attach-only one stays the caller's, and one being
+detached is skipped and left to its detach retry. A remount that fails leaves
+the volume `pending` with the error `remount after a guest reboot failed; PUT
+the same volume set to retry it`: the volume stays desired and held, its disk
+stays attached, and a PUT of the same set attaches it again (a no-op for an
+attached disk) and mounts it. A remount that finds another mount in the way
+carries that mount conflict's own error instead; remove the conflicting guest
+mount, then PUT the same set. A guest service
+that writes into a mount path between its own start and that remount writes to
+the root disk, and the mount then hides what it wrote.
 
 ### Partial failure and recovery
 
@@ -1087,9 +1100,12 @@ archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_t
 volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?, env_missing?}], "next": "…"}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM or a hibernate snapshot or archive whose guest did not answer a
-[wake](#post-v1sandboxesidwake), and `restarted_at` stamps the last one (each loses guest memory and
+[wake](#post-v1sandboxesidwake), and the reboots inside a running guest
+([guest reboots](deploy.md#guest-reboots), at most one per claim every 30 s),
+and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when
-`restarts` moves; the claim's env is written to the guest again); `failed` names why the VMM is down and was not restarted
+`restarts` moves; the claim's env is written to the guest again, and after a
+guest reboot its mounted volumes are mounted again); `failed` names why the VMM is down and was not restarted
 (see [dead VMMs](deploy.md#dead-vmms-and-host-restarts));
 `env_missing` is true while a `guest: false` env entry has no value on the node
 ([claim env](#getputpatch-v1sandboxesidenv));

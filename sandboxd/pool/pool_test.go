@@ -1573,6 +1573,12 @@ type fakeEngine struct {
 
 	volumeSpecs          []engine.VolumeSpec
 	volumeMounts         []types.Volume
+	liveMounts           []string
+	liveMountCalls       []string
+	liveMountHook        func()
+	liveMountErrFor      string
+	liveMountIgnoresCtx  bool
+	liveMountErr         error
 	volumeOps            []string
 	attachDirty          map[string]bool
 	removeSeenOps        map[string][]string
@@ -2104,6 +2110,22 @@ func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bo
 }
 
 func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
+	f.mu.Lock()
+	f.liveMountCalls = append(f.liveMountCalls, name)
+	hook, failName, ignoreCtx, failErr := f.liveMountHook, f.liveMountErrFor, f.liveMountIgnoresCtx, cmp.Or(f.liveMountErr, errors.New("mount failed"))
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err := ctx.Err(); err != nil && !ignoreCtx {
+		return err
+	}
+	if name == failName {
+		return failErr
+	}
+	f.mu.Lock()
+	f.liveMounts = append(f.liveMounts, name+":"+mount)
+	f.mu.Unlock()
 	return f.MountVolume(ctx, sock, name, mount, rw)
 }
 

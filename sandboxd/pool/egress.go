@@ -115,5 +115,7 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		TunState:    m.tunState,
 		EgressLimit: m.egressLimit,
 		Fenced:      m.isFenced,
+		Rebooted:    m.Rebooted,
+		Armed:       m.rebootArmed,
 	}
 }

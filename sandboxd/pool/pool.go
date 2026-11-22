@@ -137,6 +137,7 @@ var (
 	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
+	errRemountFailed = errors.New("remount after a guest reboot")
 
 	errFencedReplicating = fmt.Errorf("%w: node lease lost", ErrQuota)
 	errMemoryLow         = fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
@@ -312,6 +313,7 @@ type Manager struct {
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
 	silent     map[string]time.Time
+	reboots    map[*types.Sandbox]rebootGate
 	// archives is the cluster archive registry, nil unless archive_failover is set.
 	archives     archives.Registry
 	nodeID       string
@@ -439,6 +441,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
 		silent:          map[string]time.Time{},
+		reboots:         map[*types.Sandbox]rebootGate{},
 		ckMarks:         ckMarkers{dir: filepath.Join(cfg.DataDir, archiveDeleteDir)},
 		recs:            recordLocks{held: map[string]*sync.RWMutex{}, refs: map[string]int{}},
 		heals:           healVetoes{pending: map[string]struct{}{}, aborted: map[string]struct{}{}},

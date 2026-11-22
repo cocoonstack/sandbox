@@ -1,18 +1,81 @@
 package pool
 
 import (
+	"context"
 	"errors"
+	"io/fs"
+	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestAForkChildHibernatedWhileAnEarlierChildArmsGetsNoDoors(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = outboundtest.SockRoot(t)
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: hostPolicy()})
+	parent := mustClaim(t, m, testKey)
+	parentHost := m.out
+	t.Cleanup(func() { parentHost.Disarm(parent.ID, true) })
+	var hibernated atomic.Pointer[types.Sandbox]
+	withOutbound(t, m, func(o *outbound.Options) {
+		armed := o.Armed
+		o.Armed = func(ctx context.Context, sb *types.Sandbox) {
+			armed(ctx, sb)
+			if hibernated.Load() != nil || sb == parent {
+				return
+			}
+			m.mu.Lock()
+			var later *types.Sandbox
+			for _, c := range m.claimed {
+				if c != sb && c != parent {
+					later = c
+				}
+			}
+			m.mu.Unlock()
+			hibernated.Store(later)
+			m.out.Prebind(ctx, later)
+			if err := m.Hibernate(ctx, later.ID, Cred{Token: later.Token}); err != nil {
+				t.Errorf("hibernate the later child: %v", err)
+			}
+		}
+	})
+
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, time.Hour, "", "")
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	forkHost := m.out
+	for _, c := range children {
+		t.Cleanup(func() { forkHost.Disarm(c.ID, true) })
+	}
+
+	later := hibernated.Load()
+	if later == nil {
+		t.Fatal("no later child was hibernated")
+	}
+	for _, path := range []string{engine.BootSocketPath(later.VsockSocket), engine.EgressSocketPath(later.VsockSocket)} {
+		if conn, err := net.Dial("unix", path); err == nil {
+			_ = conn.Close()
+			t.Errorf("%s accepts for a child hibernated before its arm", path)
+		}
+		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s left behind (%v), want its prebind closed", path, err)
+		}
+	}
+}
 
 func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 	eng := newFakeEngine()

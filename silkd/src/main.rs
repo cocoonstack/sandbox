@@ -40,6 +40,8 @@ async fn main() {
             eprintln!("silkd imds: {e}");
         }
     });
+    #[cfg(target_os = "linux")]
+    silkd::boot::notify_host().await;
     if let Err(e) = vsock::serve(port, state).await {
         eprintln!("silkd: fatal: {e}");
         std::process::exit(1);
