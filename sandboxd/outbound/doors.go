@@ -148,6 +148,15 @@ func bindDoors(vsock string, p egress.PolicyEvaluator, bind unixBinder) (*doors,
 	return d, nil
 }
 
+func publishReserved[V any](slots map[string]*V, id string, v *V) bool {
+	held, reserved := slots[id]
+	if !reserved || held != nil {
+		return false
+	}
+	slots[id] = v
+	return true
+}
+
 func listenBound(ln net.Listener) error {
 	rc, err := ln.(syscall.Conn).SyscallConn()
 	if err != nil {

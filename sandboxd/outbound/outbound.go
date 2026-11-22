@@ -128,7 +128,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	h.mu.Lock()
 	d, displaced := h.prebound[sb.VMName], h.doors[sb.ID]
 	delete(h.prebound, sb.VMName)
-	delete(h.doors, sb.ID)
+	h.doors[sb.ID] = nil
 	stale := displaced.takeTun()
 	h.mu.Unlock()
 	if displaced != nil {
@@ -138,6 +138,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	v := h.o.View()
 	policy, ok := v.Resolve(sb)
 	if !ok || sb.VsockSocket == "" {
+		h.dropDoorsReservation(sb.ID)
 		if d != nil {
 			d.close()
 		}
@@ -170,6 +171,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	if d == nil {
 		var err error
 		if d, err = bindDoors(sb.VsockSocket, policy, listenUnix); err != nil {
+			h.dropDoorsReservation(id)
 			return err
 		}
 	}
@@ -182,8 +184,12 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 		d.resolver = newResolver(evCtx, h, c.fenced, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
 	}
 	h.mu.Lock()
-	h.doors[id] = d
+	published := publishReserved(h.doors, id, d)
 	h.mu.Unlock()
+	if !published {
+		d.close()
+		return nil
+	}
 	h.SetEgressLimit(sb)
 	go func() { _ = d.srv.Serve(d.ln) }()
 	if d.socks != nil {
@@ -305,7 +311,7 @@ func (h *Host) Reloaded() {
 	v := h.o.View()
 	var off []*tunDoor
 	h.mu.Lock()
-	live := slices.Collect(maps.Values(h.doors))
+	live := slices.DeleteFunc(slices.Collect(maps.Values(h.doors)), func(d *doors) bool { return d == nil })
 	for _, d := range live {
 		if d.tun != nil && !v.Tun(d.tun.sb.PolicyKey()) {
 			off = append(off, d.takeTun())
@@ -422,6 +428,14 @@ func (h *Host) RefuseInterceptOn(old, next *View, served func(types.PoolKey) boo
 		}
 	}
 	return nil
+}
+
+func (h *Host) dropDoorsReservation(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if d, reserved := h.doors[id]; reserved && d == nil {
+		delete(h.doors, id)
+	}
 }
 
 func (h *Host) markLane(ctx context.Context, key types.PoolKey, sock string) error {

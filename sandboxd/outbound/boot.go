@@ -64,12 +64,7 @@ func (h *Host) takeBoot(sb *types.Sandbox) *net.UnixListener {
 func (h *Host) publishBoot(id string, ln *net.UnixListener) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	held, reserved := h.boots[id]
-	if !reserved || held != nil {
-		return false
-	}
-	h.boots[id] = ln
-	return true
+	return publishReserved(h.boots, id, ln)
 }
 
 func (h *Host) serveBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListener) {

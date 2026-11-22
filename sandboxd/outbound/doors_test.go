@@ -171,6 +171,79 @@ func TestARearmWithNoPolicyLeftClosesTheDoor(t *testing.T) {
 	}
 }
 
+func TestAClaimDisarmedWhileItsDoorsBindGetsNoDoors(t *testing.T) {
+	var h *Host
+	var disarmed atomic.Bool
+	h = newHost(t, &fakeEngine{}, poolConfig(testKey, egPolicy), func(o *Options) {
+		view := o.View
+		o.View = func() *View {
+			if h != nil && disarmed.CompareAndSwap(false, true) {
+				h.Disarm("sb_doors_race", true)
+			}
+			return view()
+		}
+	})
+	sb := outboundtest.VsockSandbox(t, "sb_doors_race", testKey)
+
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+
+	if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+		_ = conn.Close()
+		t.Error("the egress door of a claim disarmed mid-arm still accepts")
+	}
+	h.mu.Lock()
+	_, kept := h.doors[sb.ID]
+	h.mu.Unlock()
+	if kept {
+		t.Error("the claim disarmed mid-arm still has a doors entry")
+	}
+}
+
+func TestAReloadDuringAnArmSkipsTheReservedSlot(t *testing.T) {
+	var h *Host
+	var reloaded atomic.Bool
+	h = newHost(t, &fakeEngine{}, poolConfig(testKey, egPolicy), func(o *Options) {
+		view := o.View
+		o.View = func() *View {
+			if h != nil && reloaded.CompareAndSwap(false, true) {
+				h.Reloaded()
+			}
+			return view()
+		}
+	})
+	sb := outboundtest.VsockSandbox(t, "sb_reload_arm", testKey)
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+
+	if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err != nil {
+		t.Errorf("dial after an arm a reload crossed: %v", err)
+	} else {
+		_ = conn.Close()
+	}
+}
+
+func TestAPolicylessArmLeavesNoDoorsEntry(t *testing.T) {
+	h := newHost(t, &fakeEngine{}, &config.Config{}, nil)
+	sb := outboundtest.VsockSandbox(t, "sb_no_policy", testKey)
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+
+	h.mu.Lock()
+	_, kept := h.doors[sb.ID]
+	h.mu.Unlock()
+	if kept {
+		t.Error("a claim with no policy kept a doors entry")
+	}
+}
+
 func TestTheProxyDoorBoundsAnIdleKeepAlive(t *testing.T) {
 	h, _ := armDialingDoor(t, "sb_idle", &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}})
 	h.mu.Lock()
