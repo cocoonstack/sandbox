@@ -470,7 +470,8 @@ sb.kill(pid)  # default SIGKILL
 it, `attach` follows live output until exit (replay and live stream hand off
 atomically; a follower that falls far behind skips what it missed). `kill`
 signals the process group the pid leads, so a pipeline or a forked child goes
-with it, even after the pid itself exited; an empty group is a no-op success.
+with it, even after the pid itself exited (guest kernel 6.9 or newer); an
+empty group is a no-op success.
 An exited process leaves the table after 5 minutes; from then on its pid
 raises `SilkdError` `not_found`.
 
