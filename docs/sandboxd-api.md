@@ -478,8 +478,9 @@ it is. These checks read silkd's own mount namespace, so a mount of the device
 in another namespace, or one moved there, is not seen. Live removal also needs
 a confirmed host detach. A missing device or pre-unmounted filesystem does not
 prove clean unmount. The marker remains on uncertainty and blocks subsequent
-readers. Release waits up to 30 seconds for each writable volume's unmount, and
-a guest that does not answer within that keeps every remaining marker.
+readers. Release waits up to 30 seconds for each writable volume's unmount. A
+guest that does not answer within that, or does not take the connection within
+10 seconds, ends the unmounts and keeps every remaining marker.
 Attach-only writers have no automatic dirty-marker protection. The caller owns
 mounting, flushing, unmounting, recovery, and fencing before reuse.
 
