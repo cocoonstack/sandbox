@@ -176,17 +176,20 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from strin
 
 func (m *Manager) startMovedGuest(ctx context.Context, sb *types.Sandbox, committed int64) bool {
 	logger := log.WithFunc("pool.startMovedGuest")
+	m.out.ArmBoot(ctx, sb)
 	var err error
 	for range 2 {
 		if err = m.eng.Start(ctx, sb.VMName); err == nil {
 			break
 		}
 		if errors.Is(err, engine.ErrStopping) {
+			m.out.Disarm(sb.ID, false)
 			return false
 		}
 		logger.Warnf(ctx, "start moved claim %s: %v", sb.ID, err)
 	}
 	if err != nil {
+		m.out.Disarm(sb.ID, false)
 		_, persistErr := m.commitIfLive(ctx, sb, func() { sb.MoveIn = false })
 		m.failLocked(ctx, sb, reasonMoveStartFailed)
 		_ = os.RemoveAll(m.moveDir(sb.ID))

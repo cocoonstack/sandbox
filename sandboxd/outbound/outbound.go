@@ -128,6 +128,14 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	return h.armProxy(ctx, sb, listenUnix)
 }
 
+func (h *Host) ArmBoot(ctx context.Context, sb *types.Sandbox) {
+	h.mu.Lock()
+	boot, displaced := h.takeBootLocked(sb)
+	h.mu.Unlock()
+	closeBoot(displaced)
+	h.armBoot(ctx, sb, boot, listenUnix)
+}
+
 // Prebind binds a warm VM's doors at refill, so a claim only has to start serving them.
 func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
 	if sb.VsockSocket == "" {

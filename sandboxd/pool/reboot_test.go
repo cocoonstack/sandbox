@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -764,6 +765,91 @@ func TestANoticeHeldByAHibernateWhoseIntentFailedSettles(t *testing.T) {
 	m.finishVolumeRun(sb, held)
 
 	waitFor(t, func() bool { return restartsOf(m, sb.ID) == 1 && !rebootPending(m, sb) })
+}
+
+func TestANoticeBetweenAMoveInStartAndItsProbeReachesTheBootDoor(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	dest := fakeOf(mc.t)
+	var knockErr error
+	knocked := false
+	dest.startHook = func() {
+		knocked = true
+		knockErr = knockBootDoor(dest.vms[dest.receives[len(dest.receives)-1]], coldBootID)
+	}
+
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	if !knocked || knockErr != nil {
+		t.Fatalf("knock between start and probe: ran %v, err %v, want the boot door to ack", knocked, knockErr)
+	}
+	waitJournaledReboot(t, mc.t, sb.ID, 1, coldBootID)
+}
+
+func TestANoticeDuringARolledBackReleaseSettlesAfterTheRollback(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	_, held, err := m.beginVolumeRun(t.Context(), sb)
+	if err != nil {
+		t.Fatalf("hold a volume run: %v", err)
+	}
+	breakStore(t, m)
+	m.store.writeMu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
+	waitFor(t, func() bool { return claimedCount(m) == 0 })
+
+	m.Rebooted(t.Context(), sb, "boot-2")
+	m.store.writeMu.Unlock()
+	if err := <-done; err == nil {
+		t.Fatal("the release committed, want its journal write to fail and roll back")
+	}
+	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
+		t.Fatalf("heal store: %v", err)
+	}
+	m.finishVolumeRun(sb, held)
+
+	waitFor(t, func() bool { return restartsOf(m, sb.ID) == 1 && !rebootPending(m, sb) })
+	healStore(t, m)
+}
+
+func TestARolledBackReleaseCountsAnEarlierQueuedSettleOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newTestManager(t, newFakeEngine())
+		sb := mustClaim(t, m, testKey)
+		m.Rebooted(t.Context(), sb, "boot-1")
+		synctest.Wait()
+		m.Rebooted(t.Context(), sb, "boot-2")
+		_, held, err := m.beginVolumeRun(t.Context(), sb)
+		if err != nil {
+			t.Fatalf("hold a volume run: %v", err)
+		}
+		breakStore(t, m)
+		m.store.writeMu.Lock()
+		done := make(chan error, 1)
+		go func() { done <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
+		for claimedCount(m) != 0 {
+			runtime.Gosched()
+		}
+
+		m.Rebooted(t.Context(), sb, "boot-3")
+		m.store.writeMu.Unlock()
+		if err := <-done; err == nil {
+			t.Fatal("the release committed, want its journal write to fail and roll back")
+		}
+		if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
+			t.Fatalf("heal store: %v", err)
+		}
+		m.finishVolumeRun(sb, held)
+		time.Sleep(3 * rebootSettleGap)
+		synctest.Wait()
+
+		if got := restartsOf(m, sb.ID); got != 2 || rebootPending(m, sb) {
+			t.Errorf("restarts %d, pending %v, want the settle queued before the release and the rollback's settle to count once", got, rebootPending(m, sb))
+		}
+	})
 }
 
 func TestARebootSettleWaitsForAVolumeChangeAndRemountsTheSetItApplied(t *testing.T) {

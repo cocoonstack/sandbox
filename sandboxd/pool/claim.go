@@ -353,6 +353,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		logger := log.WithFunc("pool.releaseResolved")
 		m.clearMark(ctx, ck)
 		m.store.recommit(ctx, rb)
+		m.rebootArmed(ctx, sb)
 		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}

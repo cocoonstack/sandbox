@@ -31,7 +31,9 @@ func (m *Manager) Rebooted(ctx context.Context, sb *types.Sandbox, bootID string
 	)
 	m.mu.Lock()
 	switch {
-	case m.claimed[sb.ID] != sb || bootID == sb.BootID:
+	case bootID == sb.BootID:
+	case m.claimed[sb.ID] != sb:
+		sb.BootID, sb.RebootPending = bootID, true
 	case sb.ColdBooting:
 		sb.BootID = bootID
 	default:
