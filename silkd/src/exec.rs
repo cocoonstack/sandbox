@@ -121,7 +121,9 @@ where
     let code = supervise.await.unwrap_or(-1);
     stdin_task.abort();
     table.remove_if(pid, &proc);
-    proto::write_frame(out, &Response::Exit { code }).await
+    proto::write_frame(out, &Response::Exit { code })
+        .await
+        .inspect_err(|_| proc.signal_group(libc::SIGKILL))
 }
 
 /// A missing or unrunnable argv or cwd is the caller's mistake; anything else is the guest's.

@@ -314,6 +314,32 @@ async fn a_client_gone_after_the_leader_exited_ends_its_background_group() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn a_quiet_leader_exiting_after_its_client_left_ends_its_background_group() {
+    if lacks_group_signal() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("child");
+    let go = dir.path().join("go");
+    let state = Arc::new(State::new());
+    let script = format!(
+        "sleep 300 >/dev/null 2>&1 & echo $! > {}; while [ ! -e {} ]; do sleep 0.01; done",
+        marker.display(),
+        go.display()
+    );
+    let (cw, mut lines, handle) =
+        connect_with(&state, json!({"op":"exec","argv":["/bin/sh","-c",script]})).await;
+    assert_eq!(type_of(&next_frame(&mut lines).await), "started");
+    let child = pid_written_to(&marker).await;
+    drop(lines);
+    drop(cw);
+    std::fs::write(&go, b"").unwrap();
+    let _ = under_deadline(handle).await;
+    wait_dead(child).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 #[ignore = "needs root"]
 async fn kill_of_an_emptied_group_spares_a_new_group_with_its_id() {
     let state = Arc::new(State::new());
