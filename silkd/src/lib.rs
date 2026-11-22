@@ -1,5 +1,6 @@
 //! silkd library surface, exposed so integration tests can drive the server in-process.
 
+pub mod boot;
 pub mod exec;
 pub mod find;
 pub mod forward;
