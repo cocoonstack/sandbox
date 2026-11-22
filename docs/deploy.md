@@ -669,7 +669,8 @@ and port relays that callers open are not in that figure; each holds up to 6
 more, the same way. systemd 240 and newer raise `fs.nr_open` to the kernel's
 maximum at boot; never lower it below 4,096 × the claims that can fill their
 doors at once on the node, which `max_running` bounds when set, plus
-sandboxd's own share.
+sandboxd's own share. Every claim and every warm VM also holds one descriptor
+for its [boot door](#guest-reboots), whatever its egress policy.
 
 Each record carries its syslog level, so alerting keys on systemd priority:
 `journalctl -u sandboxd -p err` lists the errors and `-p warning` the
@@ -783,6 +784,34 @@ this project ships; a cloudimg (UEFI) clone boots again without its per-clone
 cidata, and no shipped pool uses one. Without the daemon stream the poll reads
 `cocoon vm list`, whose liveness check needs a cocoon that verifies the VMM's
 PID (cocoonstack/cocoon#274) to never read a recycled PID as a live VMM.
+
+### Guest reboots
+
+A `reboot` inside the guest does not end its VMM: the VMM boots the guest
+again in place, so liveness sees nothing, and the guest comes back with an
+empty `/run`. That loses the claim's env file and every volume mount, while
+each volume's disk stays attached. The egress, SOCKS5, DNS and packet doors
+and port relays keep working, since the VMM and its vsock socket stay, and
+`tun0` asks the host again at boot. At each boot, before it serves, silkd
+sends the kernel's boot id to its claim's boot door (`CID2:2054`, see
+[silkd](silkd.md#boot-notice)). For a running claim whose recorded boot
+differs, sandboxd writes the guest env entries again, mounts each mounted
+volume again (one already mounted at its path from its device is left alone),
+journals the new boot, and moves `restarts` and `restarted_at`. It records no
+usage event, since the VMM never exited, and spends no restart budget. A guest
+that cannot be restored logs an error and stays running; `restarts` still
+moves. The instance-metadata document is not restored, so re-send it when
+`restarts` moves.
+
+A claim settles at most once every 30 s: notices inside that gap become one
+settle when it ends. A notice during a cold boot or a wake only records its
+boot, since that boot restores the guest itself. A notice for a hibernated,
+archived, failed or released claim is dropped. Guest root can dial the door,
+so a forged notice costs only its own claim one settle per gap. silkd sends
+one notice per boot and never retries it, so a reboot while sandboxd is down
+or restarting goes unseen. A guest service that writes into a volume's mount
+path before the remount writes to the root disk, and the mount then hides
+what it wrote.
 
 ### Maintenance
 
