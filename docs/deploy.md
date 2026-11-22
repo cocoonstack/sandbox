@@ -799,26 +799,33 @@ differs, sandboxd writes the guest env entries again, mounts each mounted
 volume again (one already mounted at its path from its device is left alone),
 journals the new boot, and moves `restarts` and `restarted_at`. The remount
 runs as a volume change: it waits for a running `PUT` or `PATCH` of the
-claim's volumes, a release cancels it, and a volume whose remount fails shows
-its error in [`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes).
-It records no usage event, since the VMM never exited, and spends no restart
-budget. A guest that cannot be restored logs an error and stays running;
-`restarts` still moves. The instance-metadata document is not restored, so
-re-send it when `restarts` moves.
+claim's volumes, and a release cancels it. A release stops the host's calls
+but not a guest `mount` that has already started, the same limit a live
+`PATCH` has; the dirty marker of a writable volume then stays. A volume whose
+remount fails turns pending with its error in
+[`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes),
+and a `PUT` of the same set mounts it again. An env write that fails does not
+skip the volumes. It records no usage event, since the VMM never exited, and
+spends no restart budget. A guest that cannot be restored logs an error and
+stays running; `restarts` still moves. The instance-metadata document is not
+restored, so re-send it when `restarts` moves.
 
 A claim settles at most once every 30 s: notices inside that gap become one
 settle when it ends, and the door waits a second after each notice it takes.
-A settle still waiting out its gap is lost when sandboxd restarts or the claim
-hibernates or moves first. During a liveness cold boot the old door still
-listens, and its notice only records the boot, since that boot restores the
-guest itself. A wake that cold-boots (from hibernation or the archive) has no
-door listening yet, so the VMM refuses its notice. A notice for a hibernated,
-archived, failed or released claim is dropped. Guest root can dial the door,
-so a forged notice costs only its own claim one settle per gap. silkd sends
-one notice per boot and never retries it, so a reboot while sandboxd is down
-or restarting goes unseen. A guest service that writes into a volume's mount
-path before the remount writes to the root disk, and the mount then hides
-what it wrote.
+An accepted notice is journaled before its ack and stays pending until a
+settle commits. A notice that reaches a claim mid-capture, hibernated,
+archived or failed, and a settle that has not run by a sandboxd restart or a
+move, run when the claim is served again: at adoption on the next start, on a
+wake, on a move-in, or when a failed capture leaves the guest running. During
+a liveness or startup cold boot the old door still listens, and its notice
+only records the boot, since that boot restores the guest itself. A wake that
+cold-boots (from hibernation or the archive) has no door listening yet, so
+the VMM refuses its notice. A notice for a released claim is dropped. Guest
+root can dial the door, so a forged notice costs only its own claim one
+settle per gap. silkd sends one notice per boot and never retries it, so a
+reboot while sandboxd is down or restarting goes unseen. A guest service that
+writes into a volume's mount path before the remount writes to the root disk,
+and the mount then hides what it wrote.
 
 ### Maintenance
 
