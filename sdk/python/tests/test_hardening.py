@@ -1,6 +1,8 @@
 """Regression tests for the SDK error-surface hardening."""
 
 import base64
+import errno
+import io
 import json
 import socket
 import threading
@@ -219,6 +221,46 @@ def test_dial_timeout_bounds_the_whole_upgrade() -> None:
     with server, pytest.raises(SandboxTimeout), dial_agent(addr, "sb_x", "tok", timeout=0.2) as conn:
         conn.send("info")
         conn.recv()
+
+
+def test_a_watch_cut_by_tcp_keepalive_ends_with_a_protocol_error():
+    ours, theirs = socket.socketpair()
+    watcher = Watcher(Conn(ours, KeepaliveExpiredReader()))
+    assert list(watcher) == []
+    assert isinstance(watcher.error, ProtocolError), watcher.error
+    assert ours.fileno() == -1, "the ended watch kept its relay open"
+    theirs.close()
+
+
+def test_a_send_stalled_past_the_socket_timeout_raises_sandbox_timeout():
+    ours, theirs = socket.socketpair()
+    ours.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    conn = Conn(ours, ours.makefile("rb"))
+    conn.settimeout(0.05)
+    try:
+        with pytest.raises(SandboxTimeout):
+            conn.send("data", data=bytes(4 << 20))
+    finally:
+        conn.close()
+        theirs.close()
+
+
+def test_a_send_cut_by_tcp_keepalive_stays_a_protocol_error():
+    with pytest.raises(ProtocolError):
+        Conn(KeepaliveExpiredSocket(), io.BytesIO()).send("info")
+
+
+class KeepaliveExpiredSocket:
+    def sendall(self, data: bytes) -> None:
+        raise OSError(errno.ETIMEDOUT, "connection timed out")
+
+
+class KeepaliveExpiredReader:
+    def readline(self, limit: int) -> bytes:
+        raise OSError(errno.ETIMEDOUT, "connection timed out")
+
+    def close(self) -> None:
+        pass
 
 
 @pytest.fixture

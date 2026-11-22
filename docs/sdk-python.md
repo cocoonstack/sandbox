@@ -80,13 +80,30 @@ client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
 `api_token` is the node token — a root `api_token` (full access), the
 [`operator_token`](deploy.md#configuration) (the claim lifecycle,
 `sandboxes`, `info` and `lookup`), or a tenant token (resource-creating
-verbs only; operator surfaces answer it 403). Every node of a cell shares the root token and the same tenants
-set. `timeout` bounds every control-plane request and the data-plane dial
-and upgrade; a guest stream then lives until the guest ends it. Unlike the
-Go SDK, where a canceled context closes any call, only `run`/`exec` take a
-`timeout` here: every other data-plane call blocks until the guest answers
-or the connection drops. A caller with a wall clock of its own passes `deadline` to a claim
-(below) so the redirect walk cannot outlive it.
+verbs only; operator surfaces answer it 403). Every node of a cell shares
+the root token and the same tenants set. `timeout` bounds every
+control-plane request, the data-plane dial and upgrade, and each wait for
+the guest in a call that silkd answers promptly: `read_file`, `write_file`,
+`list_dir`, `stat`, `mkdir`, `remove` without `recursive`, `rename`,
+`replace`, `pull`, `spawn`, `ps`, `kill`, `logs`, `session`, `sessions`,
+`Session.close`, `start_lsp`, `Lsp.stop` and `Pty.resize`. The bound is per
+wait, so a transfer whose bytes keep flowing is never cut; a guest silent
+that long raises `SandboxTimeout`. The request has left by then, so a call
+cut by the timeout may still run in the guest: on a
+[`reader`](deploy.md#reading-sleeping-claims-without-waking-them) pool the
+node accepts a call to a hibernated or archived claim at once, then wakes
+the claim and sends the request even after the SDK gave up. Retry only an
+idempotent call, or give such calls a `timeout` longer than a wake that
+falls back to a cold boot. Every other call has no bound once the
+request leaves: the streams (`run`/`exec`, `Session.exec`, `attach`,
+`find`/`find_iter`, `watch`, `open_pty`, `dial_port`, `proxy_port`,
+`Lsp.request`) live until the guest ends them, and the calls whose run time
+grows with the work wait until it is done: every git verb (git can run
+hooks, filters or a network transfer), `push` (it merges a tree) and
+`remove(recursive=True)`. Unlike the Go SDK, where a canceled context
+closes any call, only `run`/`exec` take a `timeout` of their own. A caller
+with a wall clock of its own passes `deadline` to a claim (below) so the
+redirect walk cannot outlive it.
 
 For HTTPS ([endpoints](sdk.md#https-endpoints)) with a private CA, pass a
 standard `ssl.SSLContext`:

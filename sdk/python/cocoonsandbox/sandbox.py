@@ -206,7 +206,7 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None = None,
     ) -> int | None:
         """Replays then follows output until exit; a reader that falls behind misses live chunks."""
-        return self._drain_proc("attach", pid, on_stdout, on_stderr)
+        return self._drain_proc("attach", pid, on_stdout, on_stderr, unbounded=True)
 
     @_follows_move
     def write_file(self, path: str, data: bytes, mode: int | None = None) -> None:
@@ -235,15 +235,16 @@ class Sandbox:
         self._done_rpc("fs_mkdir", path=path, parents=parents or None)
 
     def remove(self, path: str, recursive: bool = False) -> None:
-        self._done_rpc("fs_rm", path=path, recursive=recursive or None)
+        self._done_rpc("fs_rm", unbounded=recursive, path=path, recursive=recursive or None)
 
     def rename(self, src: str, dst: str) -> None:
-        self._done_rpc("fs_rename", **{"from": src, "to": dst})
+        paths: dict[str, Any] = {"from": src, "to": dst}
+        self._done_rpc("fs_rename", **paths)
 
     @_follows_move
     def push(self, dest: str, tar_stream: bytes) -> None:
         """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
-        with self._lease(self._connect("fs_push", dest=dest)) as conn:
+        with self._lease(self._connect("fs_push", unbounded=True, dest=dest)) as conn:
             _upload(conn, tar_stream, STREAM_CHUNK)
 
     @_follows_move
@@ -271,38 +272,48 @@ class Sandbox:
 
     def git_clone(self, url: str, path: str, branch: str = "", depth: int = 0, auth: str = "") -> None:
         """Clones into path, shallow when depth is set; auth rides an in-memory header."""
-        self._done_rpc("git_clone", url=url, path=path, branch=branch or None, depth=depth or None, auth=auth or None)
+        self._done_rpc(
+            "git_clone",
+            unbounded=True,
+            url=url,
+            path=path,
+            branch=branch or None,
+            depth=depth or None,
+            auth=auth or None,
+        )
 
     def git_status(self, path: str) -> dict[str, Any]:
-        return self._call("git_status", "git_status_result", path=path)
+        return self._call("git_status", "git_status_result", unbounded=True, path=path)
 
     def git_add(self, path: str, files: list[str]) -> None:
-        self._done_rpc("git_add", path=path, files=files)
+        self._done_rpc("git_add", unbounded=True, path=path, files=files)
 
     def git_commit(self, path: str, message: str, author: str) -> str:
         """Commits staged changes; returns the commit hash."""
         return cast(
             str,
-            self._call("git_commit", "git_commit_result", path=path, message=message, author=author).get("hash", ""),
+            self._call(
+                "git_commit", "git_commit_result", unbounded=True, path=path, message=message, author=author
+            ).get("hash", ""),
         )
 
     def git_push(self, path: str, auth: str = "") -> None:
-        self._done_rpc("git_push", path=path, auth=auth or None)
+        self._done_rpc("git_push", unbounded=True, path=path, auth=auth or None)
 
     def git_pull(self, path: str, auth: str = "") -> None:
-        self._done_rpc("git_pull", path=path, auth=auth or None)
+        self._done_rpc("git_pull", unbounded=True, path=path, auth=auth or None)
 
     def git_branches(self, path: str) -> dict[str, Any]:
-        return self._call("git_branch", "git_branches", path=path, action="list")
+        return self._call("git_branch", "git_branches", unbounded=True, path=path, action="list")
 
     def git_checkout(self, path: str, name: str) -> None:
-        self._done_rpc("git_branch", path=path, action="checkout", name=name)
+        self._done_rpc("git_branch", unbounded=True, path=path, action="checkout", name=name)
 
     def git_create_branch(self, path: str, name: str) -> None:
-        self._done_rpc("git_branch", path=path, action="create", name=name)
+        self._done_rpc("git_branch", unbounded=True, path=path, action="create", name=name)
 
     def git_delete_branch(self, path: str, name: str) -> None:
-        self._done_rpc("git_branch", path=path, action="delete", name=name)
+        self._done_rpc("git_branch", unbounded=True, path=path, action="delete", name=name)
 
     def watch(self, path: str, recursive: bool = False) -> Watcher:
         """Streams filesystem events under path; events after the returned Watcher exists are guaranteed captured."""
@@ -326,7 +337,7 @@ class Sandbox:
         return [self._client._handle_from(addr, child, "fork") for child in reply.get("children") or []]
 
     def hibernate(self) -> None:
-        """Snapshots and stops the VM; the next guest call restores its state."""
+        """Snapshots and stops the VM; the next guest call wakes it."""
         self._pool.drain()
         self._owner_request("hibernate", None, "hibernate", bearer=self.token)
 
@@ -486,15 +497,14 @@ class Sandbox:
     def _dial(self, deadline: float | None = None) -> Conn:
         return self._client._dial(self.owner, self.id, self.token, deadline)
 
-    def _connect(self, op: str, deadline: float | None = None, /, **fields: object) -> Conn:
+    def _connect(self, op: str, deadline: float | None = None, /, *, unbounded: bool = False, **fields: object) -> Conn:
         conn = self._pool.take()
         if conn is None:
             conn = self._dial(deadline)
         try:
-            if deadline is not None:
-                conn.settimeout(remaining_timeout(self._client.timeout, deadline, "agent request"))
+            conn.settimeout(remaining_timeout(self._client.timeout, deadline, "agent request"))
             conn.send(op, **fields)
-            if deadline is not None:
+            if unbounded or deadline is not None:
                 conn.settimeout(None)
         except BaseException:
             conn.close()
@@ -515,7 +525,7 @@ class Sandbox:
 
     @_follows_move
     def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
-        conn = self._connect(op, **fields)
+        conn = self._connect(op, unbounded=True, **fields)
         try:
             frame = _expect(conn, expect) if expect else conn.recv()
         except SilkdError:
@@ -572,12 +582,12 @@ class Sandbox:
                 local.close()
 
     @_follows_move
-    def _call(self, op: str, expect: str, **fields: object) -> dict[str, Any]:
-        with self._lease(self._connect(op, **fields)) as conn:
+    def _call(self, op: str, expect: str, /, *, unbounded: bool = False, **fields: object) -> dict[str, Any]:
+        with self._lease(self._connect(op, unbounded=unbounded, **fields)) as conn:
             return _expect(conn, expect)
 
-    def _done_rpc(self, op: str, **fields: object) -> None:
-        self._call(op, "done", **fields)
+    def _done_rpc(self, op: str, /, *, unbounded: bool = False, **fields: object) -> None:
+        self._call(op, "done", unbounded=unbounded, **fields)
 
     @_follows_move
     def _drain_proc(
@@ -587,8 +597,9 @@ class Sandbox:
         on_stdout: Callable[[bytes], object] | None,
         on_stderr: Callable[[bytes], object] | None,
         trailing_done: bool = False,
+        unbounded: bool = False,
     ) -> int | None:
-        with self._lease(self._connect(op, pid=pid)) as conn:
+        with self._lease(self._connect(op, unbounded=unbounded, pid=pid)) as conn:
             code = _pump_stdio(conn, on_stdout, on_stderr)
             if trailing_done and code is not None:
                 _expect(conn, "done")
@@ -607,7 +618,7 @@ class Sandbox:
         expired = threading.Event()
         started: deque[int] = deque(maxlen=1)
         try:
-            conn = self._connect("exec", deadline, **fields)
+            conn = self._connect("exec", deadline, unbounded=True, **fields)
         except (ProtocolError, TimeoutError):
             if deadline is not None and time.monotonic() >= deadline:
                 raise SandboxTimeout(f"command did not finish within {timeout}s") from None
@@ -853,7 +864,7 @@ def _need(frame: dict[str, Any], key: str) -> Any:
     return frame[key]
 
 
-def _rpc_ignoring_not_found(sandbox: Sandbox, op: str, **fields: object) -> None:
+def _rpc_ignoring_not_found(sandbox: Sandbox, op: str, **fields: Any) -> None:
     try:
         sandbox._done_rpc(op, **fields)
     except SilkdError as exc:

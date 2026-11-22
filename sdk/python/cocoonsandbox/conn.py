@@ -57,7 +57,7 @@ class Conn(_Closeable):
         try:
             self._sock.sendall(frame)
         except OSError as exc:
-            raise ProtocolError(f"write failed: {exc}") from exc
+            raise _io_error("write", exc) from exc
 
     def settimeout(self, timeout: float | None) -> None:
         self._sock.settimeout(timeout)
@@ -94,7 +94,7 @@ class Conn(_Closeable):
         try:
             line = self._reader.readline(MAX_FRAME + 1)
         except (OSError, ValueError) as exc:
-            raise ProtocolError(f"read failed: {exc}") from exc
+            raise _io_error("read", exc) from exc
         if not line:
             raise ProtocolError("connection closed mid-stream")
         if len(line) > MAX_FRAME:
@@ -279,6 +279,12 @@ def _handshake_error(what: str, exc: OSError) -> SandboxError:
     if isinstance(exc, TimeoutError):
         return SandboxTimeout(f"{what} timed out")
     return ProtocolError(f"{what}: {exc}")
+
+
+def _io_error(what: str, exc: Exception) -> SandboxError:
+    if isinstance(exc, TimeoutError) and exc.errno is None:
+        return SandboxTimeout("agent request timed out")
+    return ProtocolError(f"{what} failed: {exc}")
 
 
 def _read_upgrade(reader: BinaryIO, arm: Callable[[], None], tag: tuple[str, str]) -> None:
