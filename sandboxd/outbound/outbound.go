@@ -60,7 +60,6 @@ type Options struct {
 	EgressLimit func(sb *types.Sandbox) types.EgressLimit
 	Fenced      func() bool
 	Rebooted    func(ctx context.Context, sb *types.Sandbox, bootID string)
-	Armed       func(ctx context.Context, sb *types.Sandbox)
 	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
 	Dial        egress.DialFunc
 	Verdict     VerdictFunc
@@ -126,7 +125,6 @@ func (h *Host) Arm(ctx context.Context, sb *types.Sandbox) error {
 // ArmProxy opens the boot door, then serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
 func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	h.armBoot(ctx, sb)
-	h.o.Armed(ctx, sb)
 	h.mu.Lock()
 	d, displaced := h.prebound[sb.VMName], h.doors[sb.ID]
 	delete(h.prebound, sb.VMName)

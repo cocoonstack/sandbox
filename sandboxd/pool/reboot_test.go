@@ -1,19 +1,16 @@
 package pool
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net"
 	"slices"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
-	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -96,6 +93,55 @@ func TestARebootSettleRacingAReleaseNeverMountsAfterIt(t *testing.T) {
 	}
 }
 
+func TestARebootSettleRacingAReleaseBetweenTheProbeAndTheMountNeverMounts(t *testing.T) {
+	eng := newFakeEngine()
+	stall := make(chan struct{})
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	probes := eng.probeCount()
+	eng.mu.Lock()
+	eng.probeStall = stall
+	eng.mu.Unlock()
+
+	m.Rebooted(t.Context(), sb, "boot-2")
+	waitFor(t, func() bool { return eng.probeCount() > probes })
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	close(stall)
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.volumeRuns[sb] == nil
+	})
+
+	if got := liveMountsOf(eng); len(got) != 0 {
+		t.Errorf("live mounts %v, want no mount after the release that landed before it", got)
+	}
+}
+
+func TestANoticeWhileAWakeIsInFlightSettles(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.Waking = true
+	m.mu.Unlock()
+
+	m.Rebooted(t.Context(), sb, "boot-2")
+	queued := rebootQueued(m, sb)
+	m.mu.Lock()
+	sb.Waking = false
+	m.mu.Unlock()
+
+	if !queued {
+		t.Error("a notice at the door of a claim whose wake has not ended queued no settle")
+	}
+	waitJournaledReboot(t, m, sb.ID, 1, "boot-2")
+}
+
 func TestARebootSettleWaitsForAVolumeChangeAndRemountsTheSetItApplied(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -141,93 +187,15 @@ func TestARebootSettleTriesEveryVolumeWhenOneFails(t *testing.T) {
 	if got := liveMountsOf(eng); !slices.Equal(got, []string{"other:/volumes/other"}) {
 		t.Errorf("live mounts %v, want the second volume mounted after the first failed", got)
 	}
-}
-
-func TestAnAckedRebootSettleRunsAfterARestart(t *testing.T) {
-	eng := newFakeEngine()
-	eng.vms["sbx-rp-1"] = "/vsock/rp"
-	dataDir := t.TempDir()
-	seedClaims(t, dataDir, map[string]*types.Sandbox{"sb_rp": {
-		ID: "sb_rp", VMName: "sbx-rp-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/rp",
-		BootID: "boot-2", RebootPending: true, Env: types.Env{"MODE": {Value: "prod"}},
-	}})
-	m := mustManager(t, &config.Config{DataDir: dataDir}, eng)
-
-	if err := m.Reconcile(t.Context()); err != nil {
-		t.Fatalf("Reconcile: %v", err)
+	view, err := m.GetVolumes(sb.ID, "")
+	if err != nil {
+		t.Fatalf("get volumes: %v", err)
 	}
-	waitJournaledReboot(t, m, "sb_rp", 1, "boot-2")
-
-	eng.mu.Lock()
-	defer eng.mu.Unlock()
-	if got := eng.guestEnvs["/vsock/rp"]; got != "MODE=\"prod\"\n" {
-		t.Errorf("guest env %q, want the acked settle run after the restart", got)
+	for _, st := range view.States {
+		if failed := st.Name == "data"; failed != (st.Error != "") {
+			t.Errorf("volume %s state %+v, want an error on the failed remount only", st.Name, st)
+		}
 	}
-}
-
-func TestAnAckedRebootSettleSurvivesAHibernateInsideTheGap(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		m := newTestManager(t, newFakeEngine())
-		sb := mustClaim(t, m, testKey)
-		m.Rebooted(t.Context(), sb, "boot-1")
-		synctest.Wait()
-		m.Rebooted(t.Context(), sb, "boot-2")
-		synctest.Wait()
-		hibernateClaim(t, m, sb)
-		time.Sleep(2 * rebootSettleGap)
-		synctest.Wait()
-		if row := journaled(t, m)[sb.ID]; row.Restarts != 1 || !row.RebootPending {
-			t.Fatalf("journal %+v, want one restart and the acked settle still pending", row)
-		}
-
-		wakeForTest(t, m, sb)
-		synctest.Wait()
-
-		if row := journaled(t, m)[sb.ID]; row.Restarts != 2 || row.RebootPending {
-			t.Errorf("journal %+v, want the pending settle run by the wake", row)
-		}
-	})
-}
-
-func TestANoticeTakenDuringASettleStaysPendingForTheNextOne(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		eng := newFakeEngine()
-		m := newVolumeManager(t, eng, liveCatalog(t))
-		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
-		if err != nil {
-			t.Fatalf("claim: %v", err)
-		}
-		eng.liveMountHook = sync.OnceFunc(func() { m.Rebooted(t.Context(), sb, "boot-3") })
-
-		m.Rebooted(t.Context(), sb, "boot-2")
-		synctest.Wait()
-		if row := journaled(t, m)[sb.ID]; row.Restarts != 1 || !row.RebootPending {
-			t.Fatalf("journal %+v, want the first settle committed and the notice it overlapped still pending", row)
-		}
-		time.Sleep(rebootSettleGap)
-		synctest.Wait()
-
-		if row := journaled(t, m)[sb.ID]; row.Restarts != 2 || row.RebootPending || row.BootID != "boot-3" {
-			t.Errorf("journal %+v, want the overlapped notice settled at the gap end", row)
-		}
-	})
-}
-
-func TestARebootNoticeAtTheDoorAMemoryWakeArmedSettles(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
-	sb := mustClaim(t, m, testKey)
-	hibernateClaim(t, m, sb)
-	withOutbound(t, m, func(o *outbound.Options) {
-		armed := o.Armed
-		o.Armed = func(ctx context.Context, armedSB *types.Sandbox) {
-			armed(ctx, armedSB)
-			m.Rebooted(ctx, armedSB, "boot-2")
-		}
-	})
-
-	wakeForTest(t, m, sb)
-
-	waitJournaledReboot(t, m, sb.ID, 1, "boot-2")
 }
 
 func TestTheSameBootNoticeTwiceSettlesOnce(t *testing.T) {
@@ -325,22 +293,26 @@ func TestANoticeForAClaimThatDoesNotRunIsDropped(t *testing.T) {
 
 func TestANoticeOfAColdBootIsRecordedWithoutASettle(t *testing.T) {
 	for _, tt := range []struct {
-		name  string
-		pools []config.PoolSpec
-		door  bool
-		clone bool
-		park  func(t *testing.T, m *Manager, sb *types.Sandbox)
-		boot  func(t *testing.T, m *Manager, sb *types.Sandbox)
+		name     string
+		pools    []config.PoolSpec
+		door     bool
+		clone    bool
+		direct   bool
+		wantBoot string
+		park     func(t *testing.T, m *Manager, sb *types.Sandbox)
+		boot     func(t *testing.T, m *Manager, sb *types.Sandbox)
 	}{
 		{
-			name: "liveness restart",
-			door: true,
-			park: func(_ *testing.T, m *Manager, sb *types.Sandbox) { killVMM(fakeOf(m), sb.VMName) },
-			boot: func(t *testing.T, m *Manager, _ *types.Sandbox) { runLiveness(t, m) },
+			name:     "liveness restart",
+			door:     true,
+			wantBoot: coldBootID,
+			park:     func(_ *testing.T, m *Manager, sb *types.Sandbox) { killVMM(fakeOf(m), sb.VMName) },
+			boot:     func(t *testing.T, m *Manager, _ *types.Sandbox) { runLiveness(t, m) },
 		},
 		{
-			name: "wake of a failed claim",
-			door: true,
+			name:     "wake of a failed claim",
+			door:     true,
+			wantBoot: coldBootID,
 			park: func(t *testing.T, m *Manager, sb *types.Sandbox) {
 				editView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
 				killVMM(fakeOf(m), sb.VMName)
@@ -353,7 +325,9 @@ func TestANoticeOfAColdBootIsRecordedWithoutASettle(t *testing.T) {
 			},
 		},
 		{
-			name: "hibernate wake that cold-boots",
+			name:     "hibernate wake that cold-boots",
+			direct:   true,
+			wantBoot: coldBootID2,
 			park: func(t *testing.T, m *Manager, sb *types.Sandbox) {
 				hibernateClaim(t, m, sb)
 				fakeOf(m).probeFails = wakeRestoreTries
@@ -361,9 +335,10 @@ func TestANoticeOfAColdBootIsRecordedWithoutASettle(t *testing.T) {
 			boot: wakeForTest,
 		},
 		{
-			name:  "archived wake that cold-boots its clone",
-			pools: []config.PoolSpec{archivePool(keepAnHour)},
-			clone: true,
+			name:   "archived wake that cold-boots its clone",
+			pools:  []config.PoolSpec{archivePool(keepAnHour)},
+			clone:  true,
+			direct: true,
 			park: func(t *testing.T, m *Manager, sb *types.Sandbox) {
 				mustArchive(t, m, sb)
 				fakeOf(m).probeFails = wakeRestoreTries
@@ -388,14 +363,15 @@ func TestANoticeOfAColdBootIsRecordedWithoutASettle(t *testing.T) {
 					name = eng.clones[len(eng.clones)-1]
 				}
 				knockErr = knockBootDoor(eng.vms[name], coldBootID)
+				if tt.direct {
+					m.Rebooted(t.Context(), sb, coldBootID2)
+				}
 				queuedInBoot = rebootQueued(m, sb)
 			}
 
 			tt.boot(t, m, sb)
 
-			wantBoot := ""
 			if tt.door {
-				wantBoot = coldBootID
 				if knockErr != nil {
 					t.Fatalf("knock during the boot: %v, want the listening door to ack", knockErr)
 				}
@@ -408,8 +384,8 @@ func TestANoticeOfAColdBootIsRecordedWithoutASettle(t *testing.T) {
 			if queuedInBoot || rebootQueued(m, sb) {
 				t.Errorf("queued during the boot %v, after it %v, want no reboot settle", queuedInBoot, rebootQueued(m, sb))
 			}
-			if row := journaled(t, m)[sb.ID]; row == nil || row.Restarts != 1 || row.BootID != wantBoot {
-				t.Errorf("journal %+v, want exactly the one cold boot counted and boot %q recorded", row, wantBoot)
+			if row := journaled(t, m)[sb.ID]; row == nil || row.Restarts != 1 || row.BootID != tt.wantBoot {
+				t.Errorf("journal %+v, want exactly the one cold boot counted and boot %q recorded", row, tt.wantBoot)
 			}
 		})
 	}
@@ -470,7 +446,7 @@ func waitJournaledReboot(t *testing.T, m *Manager, id string, restarts int, boot
 	t.Helper()
 	waitFor(t, func() bool {
 		row := journaled(t, m)[id]
-		return row != nil && row.Restarts == restarts && row.BootID == bootID && !row.RebootPending
+		return row != nil && row.Restarts == restarts && row.BootID == bootID
 	})
 }
 

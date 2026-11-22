@@ -18,6 +18,7 @@ import (
 
 const (
 	bootNoticeTimeout = 2 * time.Second
+	bootNoticeGap     = time.Second
 	bootNoticeMax     = 64
 	bootAck           = "\n"
 )
@@ -82,11 +83,13 @@ func (h *Host) serveBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixLis
 			time.Sleep(acceptBackoff)
 			continue
 		}
-		h.takeBootNotice(ctx, sb, conn)
+		if h.takeBootNotice(ctx, sb, conn) {
+			time.Sleep(bootNoticeGap)
+		}
 	}
 }
 
-func (h *Host) takeBootNotice(ctx context.Context, sb *types.Sandbox, conn net.Conn) {
+func (h *Host) takeBootNotice(ctx context.Context, sb *types.Sandbox, conn net.Conn) bool {
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(bootNoticeTimeout))
 	line, err := bufio.NewReaderSize(conn, bootNoticeMax).ReadSlice('\n')
@@ -96,10 +99,11 @@ func (h *Host) takeBootNotice(ctx context.Context, sb *types.Sandbox, conn net.C
 	}
 	if err != nil {
 		log.WithFunc("outbound.takeBootNotice").Debugf(ctx, "drop a malformed boot notice of %s: %v", sb.ID, err)
-		return
+		return false
 	}
 	h.o.Rebooted(ctx, sb, bootID.String())
 	_, _ = io.WriteString(conn, bootAck)
+	return true
 }
 
 func closeBoot(ln *net.UnixListener) {

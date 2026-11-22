@@ -89,6 +89,31 @@ func TestARearmReplacesTheBootDoorAndClosePreboundDropsAnUnclaimedOne(t *testing
 	}
 }
 
+func TestTheBootDoorPacesTheNoticesItHandsOn(t *testing.T) {
+	notices := make(chan string, 4)
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, nil), func(o *Options) {
+		o.Rebooted = func(_ context.Context, _ *types.Sandbox, bootID string) { notices <- bootID }
+	})
+	sb := outboundtest.VsockSandbox(t, "sb_boot_pace", testKey)
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+	path := engine.BootSocketPath(sb.VsockSocket)
+
+	sendBootNotice(t, path, "5f1c0e2a-77b1-4c43-9d2e-0a1b2c3d4e5f\n")
+	start := time.Now()
+	ack := sendBootNotice(t, path, "0f6a3c1e-2b4d-4e8f-9a7c-5d3e1b2a4c6f\n")
+	took := time.Since(start)
+
+	if ack != "\n" || len(notices) != 2 {
+		t.Fatalf("ack %q, %d notices, want both taken", ack, len(notices))
+	}
+	if took < bootNoticeGap*9/10 {
+		t.Errorf("second notice answered after %v, want the door to wait about %v", took, bootNoticeGap)
+	}
+}
+
 func TestABootDoorDisarmedWhileItBindsIsClosedNotPublished(t *testing.T) {
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, nil), nil)
 	sb := outboundtest.VsockSandbox(t, "sb_boot_race", testKey)

@@ -402,7 +402,6 @@ func newHost(t *testing.T, eng *fakeEngine, cfg *config.Config, edit func(*Optio
 		RecordDNS:   func(context.Context, string, string, DNSEvent) {},
 		Transfer:    func(context.Context, string, string, egress.Event, int64, int64) {},
 		EgressLimit: func(*types.Sandbox) types.EgressLimit { return types.EgressLimit{} },
-		Armed:       func(context.Context, *types.Sandbox) {},
 		Lock:        func(string) error { return nil },
 		Unlock:      func(string) error { return nil },
 	}
