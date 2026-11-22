@@ -485,10 +485,10 @@ mounting, flushing, unmounting, recovery, and fencing before reuse.
 
 After a [reboot inside the guest](deploy.md#guest-reboots) sandboxd mounts each
 mounted volume again; an attach-only one stays the caller's. A remount that
-fails leaves the volume `attached` with the error `remount after a guest reboot
-failed; PATCH the volume out and back in, or reboot the guest again`: a PATCH
-that removes it and one that adds it again mount it, and so does the remount
-after the next reboot. A PUT of the same set changes nothing. A guest service
+fails leaves the volume `pending` with the error `remount after a guest reboot
+failed; PUT the same volume set to retry it`: the volume stays desired and
+held, its disk stays attached, and a PUT of the same set attaches it again
+(a no-op for an attached disk) and mounts it. A guest service
 that writes into a mount path between its own start and that remount writes to
 the root disk, and the mount then hides what it wrote.
 

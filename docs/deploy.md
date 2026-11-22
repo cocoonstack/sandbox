@@ -802,10 +802,11 @@ runs as a volume change: it waits for a running `PUT` or `PATCH` of the
 claim's volumes, and a release cancels it. A release stops the host's calls
 but not a guest `mount` that has already started, the same limit a live
 `PATCH` has; the dirty marker of a writable volume then stays. A volume whose
-remount fails shows a remount error in
-[`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes);
-a `PATCH` that removes it and one that adds it again mount it, as does the
-next reboot's remount. An env write that fails does not skip the volumes. It records no usage event, since the VMM never exited, and
+remount fails turns `pending` with a remount error in
+[`GET /v1/sandboxes/{id}/volumes`](sandboxd-api.md#get-v1sandboxesidvolumes),
+and a `PUT` of the same set retries the remount. Its hold and dirty marker
+stay, and a release does not unmount or clear it. An env write that fails does
+not skip the volumes. It records no usage event, since the VMM never exited, and
 spends no restart budget. A guest that cannot be restored logs an error and
 stays running; `restarts` still moves. The instance-metadata document is not
 restored, so re-send it when `restarts` moves.
