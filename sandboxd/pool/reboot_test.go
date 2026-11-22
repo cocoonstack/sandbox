@@ -162,15 +162,48 @@ func TestARebootSettleTriesEveryVolumeWhenOneFails(t *testing.T) {
 	if got := liveMountsOf(eng); !slices.Equal(got, []string{"other:/volumes/other"}) {
 		t.Errorf("live mounts %v, want the second volume mounted after the first failed", got)
 	}
-	want := map[string]string{"data": volumeRemountFailed, "other": ""}
+	want := map[string]types.VolumeState{
+		"data":  {Name: "data", State: types.VolumePending, Error: volumeRemountFailed},
+		"other": {Name: "other", State: types.VolumeAttached},
+	}
 	for name, st := range volumeStates(t, m, sb.ID) {
-		if st.State != types.VolumeAttached || st.Error != want[name] {
-			t.Errorf("volume %s state %+v, want attached with error %q", name, st, want[name])
+		if st != want[name] {
+			t.Errorf("volume %s state %+v, want %+v", name, st, want[name])
 		}
 		delete(want, name)
 	}
 	if len(want) != 0 {
 		t.Errorf("no state for %v", want)
+	}
+}
+
+func TestAVolumeWhoseRemountFailedMountsAgainOnAPutOfTheSameSet(t *testing.T) {
+	eng := newFakeEngine()
+	eng.liveMountErrFor = "data"
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	set := []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: set})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	m.Rebooted(t.Context(), sb, "boot-2")
+	waitJournaledReboot(t, m, sb.ID, 1, "boot-2")
+	if row := journaled(t, m)[sb.ID]; len(row.Volumes) != 0 || len(row.VolumesWant) != 1 {
+		t.Fatalf("journal volumes %v want %v, want the failed volume wanted but not applied", row.Volumes, row.VolumesWant)
+	}
+	eng.mu.Lock()
+	eng.liveMountErrFor = ""
+	eng.mu.Unlock()
+
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", set); err != nil {
+		t.Fatalf("put the same set: %v", err)
+	}
+
+	if st := volumeStates(t, m, sb.ID)["data"]; st.State != types.VolumeAttached || st.Error != "" {
+		t.Errorf("state %+v, want the volume attached with its error cleared", st)
+	}
+	if got := liveMountsOf(eng); !slices.Equal(got, []string{"data:/volumes/data"}) {
+		t.Errorf("live mounts %v, want the put to mount the volume again", got)
 	}
 }
 

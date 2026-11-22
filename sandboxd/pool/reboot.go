@@ -120,7 +120,7 @@ func (m *Manager) restoreRebootedGuest(ctx context.Context, sb *types.Sandbox, r
 		err := m.eng.MountLiveVolume(ctx, sock, v.Name, v.Mount, v.RW())
 		if err != nil {
 			m.recordVolumeError(sb, run, v.Name, fmt.Errorf("%w: %w", errRemountFailed, err))
-			errs = append(errs, fmt.Errorf("mount volume %q: %w", v.Name, err))
+			errs = append(errs, fmt.Errorf("mount volume %q: %w", v.Name, err), m.commitVolumeApplied(ctx, sb, run, v, false))
 			continue
 		}
 		m.clearVolumeError(sb, run, v.Name)

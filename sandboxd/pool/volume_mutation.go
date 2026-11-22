@@ -15,7 +15,7 @@ import (
 const (
 	volumeChangeFailed      = "volume change failed; retry the desired target"
 	volumeChangeInterrupted = "volume change interrupted; retry the desired target"
-	volumeRemountFailed     = "remount after a guest reboot failed; PATCH the volume out and back in, or reboot the guest again"
+	volumeRemountFailed     = "remount after a guest reboot failed; PUT the same volume set to retry it"
 
 	volumeMutationTimeout = 30 * time.Second
 )
