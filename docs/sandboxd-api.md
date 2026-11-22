@@ -484,11 +484,14 @@ Attach-only writers have no automatic dirty-marker protection. The caller owns
 mounting, flushing, unmounting, recovery, and fencing before reuse.
 
 After a [reboot inside the guest](deploy.md#guest-reboots) sandboxd mounts each
-mounted volume again; an attach-only one stays the caller's. A remount that
-fails leaves the volume `pending` with the error `remount after a guest reboot
-failed; PUT the same volume set to retry it`: the volume stays desired and
-held, its disk stays attached, and a PUT of the same set attaches it again
-(a no-op for an attached disk) and mounts it. A guest service
+mounted volume again; an attach-only one stays the caller's, and one being
+detached is skipped and left to its detach retry. A remount that fails leaves
+the volume `pending` with the error `remount after a guest reboot failed; PUT
+the same volume set to retry it`: the volume stays desired and held, its disk
+stays attached, and a PUT of the same set attaches it again (a no-op for an
+attached disk) and mounts it. A remount that finds another mount in the way
+carries that mount conflict's own error instead; remove the conflicting guest
+mount, then PUT the same set. A guest service
 that writes into a mount path between its own start and that remount writes to
 the root disk, and the mount then hides what it wrote.
 

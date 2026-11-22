@@ -810,10 +810,12 @@ stay, and a release does not unmount or clear it. An env write that fails does
 not skip the volumes. It records no usage event, since the VMM never exited, and
 spends no restart budget. A guest that does not answer the settle's probe
 moves nothing: the notice stays pending and the settle is tried again up to
-3 times, 30 s apart, then waits for the claim's next arm or notice. A guest
-that answers but whose env write or remount fails logs an error and stays
-running, and `restarts` still moves. The instance-metadata document is not
-restored, so re-send it when `restarts` moves.
+3 times, 30 s apart, then waits for the claim's next arm or notice. After the
+retries are used up, an arm gets one more try and a fresh notice gets one try
+and 3 retries again. A guest that answers but whose env write or remount fails
+logs an error and stays running, and `restarts` still moves. The
+instance-metadata document is not restored, so re-send it when `restarts`
+moves.
 
 A claim settles at most once every 30 s: notices inside that gap become one
 settle when it ends, and the door waits a second after each notice it takes.
@@ -825,15 +827,17 @@ before its retry lands. A notice that reaches a claim mid-capture,
 hibernated, archived or failed, and a settle that has not run by a sandboxd
 restart or a move, run when the claim is served again: at adoption on the
 next start, on a wake, when a move-in commits, or when a failed capture or
-an abandoned hibernate leaves the guest running. A cold boot clears the pending notice, since it restores the
-guest itself, and counts one restart. During a liveness cold boot, one
-finished at startup, or the wake of a failed claim, the old door still
+an abandoned hibernate leaves the guest running. A cold boot clears the
+pending notice, since it restores the guest itself, and counts one restart.
+During a liveness cold boot, one finished at startup, or the wake of a failed
+claim, the old door still
 listens, and its notice only records the boot. A wake that cold-boots (from
 hibernation or the archive) has no door listening yet, so the VMM refuses its
 notice. A notice for a released claim is dropped. The remount skips a volume
 that is detaching after a failed detach and leaves it to the detach retry.
-Guest root can dial the door, so a forged notice costs its own claim one
-settle per gap and at most one journal write until that settle commits.
+Guest root can dial the door, so forged notices cost their own claim one
+settle per gap and one journal write each time the claim turns pending, plus
+one journal write per volume whose remount fails.
 silkd sends one notice per boot and never retries it, so a reboot while
 sandboxd is down or restarting goes unseen. A guest service that writes into
 a volume's mount path before the remount writes to the root disk, and the
