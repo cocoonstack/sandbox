@@ -85,6 +85,7 @@ jobs:
           GOWORK=off go test -race -count=1 -v -run 'TestTwoNodesOnOneMetaStore|TestNodesOfACell|TestAMetaStoreNodeWithoutACell' ./pool/ | tee -a "$RUNNER_TEMP/pg-test.log"
           ! grep -E -- '--- SKIP|no tests to run' "$RUNNER_TEMP/pg-test.log"
 
+      # Two buckets, each with a key that reaches only it, prove each store of a fallback pair signs with its own key.
       - name: Test the S3 checkpoint store against a real endpoint
         working-directory: sandboxd
         shell: bash
@@ -92,18 +93,33 @@ jobs:
           SANDBOX_S3_E2E: http://127.0.0.1:8333
           AWS_ACCESS_KEY_ID: sbxci
           AWS_SECRET_ACCESS_KEY: sbxcisecret
+          SANDBOX_S3_E2E_PRIMARY_ACCESS_KEY_ID: sbxprimary
+          SANDBOX_S3_E2E_PRIMARY_SECRET_ACCESS_KEY: sbxprimarysecret
+          SANDBOX_S3_E2E_FALLBACK_ACCESS_KEY_ID: sbxfallback
+          SANDBOX_S3_E2E_FALLBACK_SECRET_ACCESS_KEY: sbxfallbacksecret
         run: |
-          docker run -d --name s3 -p 127.0.0.1:8333:8333 chrislusf/seaweedfs:4.54@sha256:4b42c212543a0acd4c0e675215ecdcaf62a186ef98def76c7e12701871222d15 server -s3 -ip.bind=0.0.0.0
-          for _ in $(seq 60); do
-            docker exec s3 sh -c 'echo "s3.bucket.create -name sbx-checkpoints" | timeout 10 weed shell' 2>&1 | grep -q 'created bucket' && break
-            sleep 1
+          cat > "$RUNNER_TEMP/s3.json" <<'EOF'
+          {"identities": [
+            {"name": "admin", "credentials": [{"accessKey": "sbxci", "secretKey": "sbxcisecret"}], "actions": ["Admin", "Read", "List", "Tagging", "Write"]},
+            {"name": "primary", "credentials": [{"accessKey": "sbxprimary", "secretKey": "sbxprimarysecret"}], "actions": ["Read:sbx-checkpoints", "Write:sbx-checkpoints", "List:sbx-checkpoints"]},
+            {"name": "fallback", "credentials": [{"accessKey": "sbxfallback", "secretKey": "sbxfallbacksecret"}], "actions": ["Read:sbx-checkpoints-fallback", "Write:sbx-checkpoints-fallback", "List:sbx-checkpoints-fallback"]}
+          ]}
+          EOF
+          docker run -d --name s3 -p 127.0.0.1:8333:8333 -v "$RUNNER_TEMP/s3.json:/etc/seaweedfs/s3.json:ro" chrislusf/seaweedfs:4.54@sha256:4b42c212543a0acd4c0e675215ecdcaf62a186ef98def76c7e12701871222d15 server -s3 -ip.bind=0.0.0.0 -s3.config=/etc/seaweedfs/s3.json
+          for bucket in sbx-checkpoints sbx-checkpoints-fallback; do
+            for _ in $(seq 60); do
+              docker exec s3 sh -c "echo 's3.bucket.create -name $bucket' | timeout 10 weed shell" 2>&1 | grep -q 'created bucket' && break
+              sleep 1
+            done
           done
           for _ in $(seq 60); do
             curl -s -o /dev/null "$SANDBOX_S3_E2E" && break
             sleep 1
           done
-          GOWORK=off go test -race -count=1 -v -run '^TestS3BackendContractRealEndpoint$' ./store/s3/ | tee "$RUNNER_TEMP/s3-test.log" || { docker logs s3; exit 1; }
+          GOWORK=off go test -race -count=1 -v -run '^(TestS3BackendContractRealEndpoint|TestFallbackContractRealEndpoint)$' ./store/s3/ ./store/fallback/ | tee "$RUNNER_TEMP/s3-test.log" || { docker logs s3; exit 1; }
           grep -E -- '^--- PASS: TestS3BackendContractRealEndpoint \(' "$RUNNER_TEMP/s3-test.log"
+          grep -E -- '^--- PASS: TestFallbackContractRealEndpoint \(' "$RUNNER_TEMP/s3-test.log"
+          grep -E -- '--- PASS: TestFallbackContractRealEndpoint/each_store_signs_with_its_own_key \(' "$RUNNER_TEMP/s3-test.log"
 
       - name: Test the tun path through a kernel exit
         working-directory: sandboxd
