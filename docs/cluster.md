@@ -12,7 +12,10 @@ mesh of one.
 ## Cells
 
 A cell is one mesh and the backends its nodes share: one PostgreSQL database
-for `meta_store`, one checkpoint store location, and one set of secrets
+for `meta_store`, one checkpoint store location (while the cell moves to a new
+bucket, the old one also serves as a
+[fallback](deploy.md#moving-checkpoints-to-another-bucket) for the records
+written before the move), and one set of secrets
 (`api_token`, `mesh.cluster_key`, `preview_secret`, the egress root). Every
 node of a cell holds the cell's credentials, so a host compromise on one node
 reaches its whole cell. A cell that shares nothing with another bounds that

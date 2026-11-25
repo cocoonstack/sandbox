@@ -132,7 +132,7 @@ the intersection of the two.
 | `preview_secret` | — | HMAC secret signing preview tokens, shared within a [cell](cluster.md#cells). Restart only |
 | `preview_advertise` | = `preview_listen` | the browser-facing preview base URL, minted into every preview URL, so it must name a routable host (a wildcard `preview_listen` needs it set explicitly); nodes behind one TLS proxy may share it, while signed tokens route internally through each owner's `advertise_addr` |
 | `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes (checkpoint ids are node-generated and never collide). Abandoned staging (`*.tmp`) is removed only once it is older than an hour, at startup and on the hourly generation sweep, so a publish in flight on another node of a shared root survives; the `meta.json` commit pointer is fsynced with its directory |
-| `checkpoint_store` | dir | checkpoint, archive and replica wake image, and promoted-template backend (all live in one store root, id-namespaced ck_/ar_/tp_; listing checkpoints reads only the ck_ records): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). Credentials come from the standard AWS chain (env/IAM role), never this file. Holes and all-zero chunks are never uploaded, and a fetch recreates the file at its full size and writes only the present chunks, so a mostly-empty disk costs its data, not its size, on the wire and on the fetching node. Consecutive captures of one claim upload only the chunks that changed (the first capture after a wake uploads everything again when no other live record of that claim remains, because the wake deletes the record it restored from). sandboxd never deletes a chunk or a manifest from the bucket; [Reclaiming S3 storage](#reclaiming-s3-storage) has the key layout and the operator's job. A publish or fetch is aborted after 30 minutes. Each publish in flight holds up to (`upload_concurrency` + `publish_concurrency`) × 16 MiB of chunk buffers, 192 MiB at the defaults ([S3 transfer concurrency](#s3-transfer-concurrency)), and sandboxd does not cap concurrent checkpoints or promotes, so the layer above it limits how many a tenant starts. Do not put an expiry lifecycle rule on the prefix: it would delete chunks a live record still names. Budget storage for every generation and chunk until your reclaim runs. When caching a new generation, each node prunes other cached generations of that record unused for at least an hour. The periodic generation sweep drops a node's cache of a record once the record is gone from the bucket and the cache is unused for at least an hour. Absent = the dir backend at `checkpoint_dir` |
+| `checkpoint_store` | dir | checkpoint, archive and replica wake image, and promoted-template backend (all live in one store root, id-namespaced ck_/ar_/tp_; listing checkpoints reads only the ck_ records): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). The bucket's key comes from the env vars `access_key_id_env` and `secret_access_key_env` name (both or neither), else from the standard AWS chain (env/IAM role), never this file. An optional `fallback` block, shaped like `s3`, names the bucket a cell is moving its records from: sandboxd reads, labels and deletes there the records `s3` lacks, and writes no new record to it ([Moving checkpoints to another bucket](#moving-checkpoints-to-another-bucket)). Holes and all-zero chunks are never uploaded, and a fetch recreates the file at its full size and writes only the present chunks, so a mostly-empty disk costs its data, not its size, on the wire and on the fetching node. Consecutive captures of one claim upload only the chunks that changed (the first capture after a wake uploads everything again when no other live record of that claim remains, because the wake deletes the record it restored from). sandboxd never deletes a chunk or a manifest from the bucket; [Reclaiming S3 storage](#reclaiming-s3-storage) has the key layout and the operator's job. A publish or fetch is aborted after 30 minutes. Each publish in flight holds up to (`upload_concurrency` + `publish_concurrency`) × 16 MiB of chunk buffers, 192 MiB at the defaults ([S3 transfer concurrency](#s3-transfer-concurrency)), and sandboxd does not cap concurrent checkpoints or promotes, so the layer above it limits how many a tenant starts. Do not put an expiry lifecycle rule on the prefix: it would delete chunks a live record still names. Budget storage for every generation and chunk until your reclaim runs. When caching a new generation, each node prunes other cached generations of that record unused for at least an hour. The periodic generation sweep drops a node's cache of a record once the record is gone from the bucket and the cache is unused for at least an hour. Absent = the dir backend at `checkpoint_dir` |
 | `checkpoint_ttl_hours` | 0 (keep forever) | ages out checkpoints older than this; the sweep runs hourly and at startup. Explicit deletes never wait for it. Must be nonzero and match fleet-wide when `checkpoint_peer_heal` is on ([why](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)) |
 | `checkpoint_peer_heal` | false | on a cluster, lets a node pull a checkpoint it lacks from a peer — found via a live probe, not gossip — rather than failing the branch; see [placement lifecycle](cluster.md#checkpoints-on-a-cluster). Three requirements, all enforced at config load: a nonempty `api_token` (the blob transfer between peers authenticates with it; without one the raw record stream would be open), `mesh.cluster_key` set (the pull presents the fleet `api_token` to an address learned from the peer probe, so the gossip layer carrying that address must itself be authenticated), and `checkpoint_ttl_hours` nonzero. A shared checkpoint store (`checkpoint_store` kind `s3`) ignores this setting — every node already resolves every checkpoint directly, so there is nothing to heal |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence. The pool follows the target down: warm VMs above it are destroyed once the count has stayed above it for a full decay period, so a burst does not leave the pool parked at its high-water mark |
@@ -396,17 +396,26 @@ admitted and fails at mount time (500) instead of being refused early (409).
 Whoever hands out attach-only `rw` access owns that trade; see
 [sandboxd-api](sandboxd-api.md#attach-only-volumes).
 
-### S3-compatible stores (GCS, MinIO)
+### S3-compatible stores (GCS, R2, MinIO)
 
 A non-AWS store needs `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
 `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` in the node env: the SDK
 otherwise sends CRC32 checksum headers that not every S3-compatible store
-accepts. For GCS through its XML API, set `endpoint` to
+accepts. The two variables apply to every bucket the node uses, a `fallback`
+included. For GCS through its XML API, set `endpoint` to
 `https://storage.googleapis.com`, `region` to `auto`, and `force_path_style`
 and `unsigned_accept_encoding` to true, and supply an HMAC key of the node's
-service account as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. GCS rewrites
-`Accept-Encoding` in transit, so a signature that covers it never verifies;
-`unsigned_accept_encoding` keeps that header out of the signature.
+service account as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or in the env
+vars the block names. GCS rewrites `Accept-Encoding` in transit, so a signature
+that covers it never verifies; `unsigned_accept_encoding` keeps that header out
+of the signature. For Cloudflare R2, set `endpoint` to
+`https://<account-id>.r2.cloudflarestorage.com`, `region` to `auto` and
+`force_path_style` to true, and supply an R2 API token's S3 key; R2 needs no
+`unsigned_accept_encoding`.
+
+R2 takes uploads more slowly than GCS. In one measurement from a bare-metal
+host, 32 parallel 16 MiB uploads reached about 162 MB/s to R2 against 861 MB/s
+to GCS, so expect an archive or promote to take several times longer on R2.
 
 ### S3 transfer concurrency
 
@@ -420,6 +429,10 @@ config error.
 | `publish_concurrency` | 4 | files one publish reads and hashes at once |
 | `fetch_concurrency` | 8 | chunk downloads per fetch |
 | `meta_read_concurrency` | 8 | record and manifest reads per listing or publish |
+
+A `fallback` block takes the same fields for its own bucket. sandboxd
+publishes no record to it, so only its `fetch_concurrency` and
+`meta_read_concurrency` matter.
 
 The limits are per transfer, not per node: two publishes in flight upload up
 to twice `upload_concurrency` chunks. The HTTP client keeps up to the largest
@@ -474,6 +487,143 @@ superseded record's unique chunks behind. Successive captures of a running
 claim share few memory chunks, because most of them change between captures, so
 each superseded capture leaves most of its memory image behind; an archive that
 took 10,752 MiB as whole files stored about 912 MiB as chunks.
+
+### Moving checkpoints to another bucket
+
+A cell can move its S3 `checkpoint_store` to a new bucket without copying it.
+Put the new bucket in `s3` and the old one in `fallback`, each naming the env
+vars that hold its own key:
+
+```json
+"checkpoint_store": {
+  "kind": "s3",
+  "s3": {
+    "bucket": "sbx-checkpoints-r2", "prefix": "ck/",
+    "endpoint": "https://<account-id>.r2.cloudflarestorage.com",
+    "region": "auto", "force_path_style": true,
+    "access_key_id_env": "R2_ACCESS_KEY_ID",
+    "secret_access_key_env": "R2_SECRET_ACCESS_KEY"
+  },
+  "fallback": {
+    "bucket": "sbx-checkpoints", "prefix": "ck/",
+    "endpoint": "https://storage.googleapis.com",
+    "region": "auto", "force_path_style": true, "unsigned_accept_encoding": true,
+    "access_key_id_env": "AWS_ACCESS_KEY_ID",
+    "secret_access_key_env": "AWS_SECRET_ACCESS_KEY"
+  }
+}
+```
+
+The config does not load unless `fallback` has a bucket and differs from `s3`
+in endpoint, bucket or prefix, and both blocks name both env vars: a block left
+on the AWS chain would sign with whatever `AWS_ACCESS_KEY_ID` holds, which may
+be the other bucket's key. The node does not start if a named env var is empty.
+At start it logs, for the checkpoint and the template view, the bucket it
+writes and the bucket it falls back to.
+
+The `fallback` key needs more than read access: sandboxd lists the old bucket,
+deletes each record there once it is done with it, and writes `labels.json`
+beside a template it relabels there. With a read-only key every delete of an
+old record fails and is retried, so the old bucket never empties.
+
+On a node with a `fallback`:
+
+- **Writes go only to `s3`.** Checkpoints, archives, replicas and promoted
+  templates land there. Dedup reads only `s3` too, so the first capture of a
+  claim after the move uploads it whole, as the first capture after a wake
+  already does.
+- **A read asks `fallback` only after `s3` answers that the record's
+  `meta.json` does not exist.** That covers a wake from archive, a branch, a
+  reader's file reads and a template claim. Any other failure of `s3`, such as a
+  5xx after the SDK's retries, a 403, a missing bucket or a timeout, is returned
+  without asking `fallback`, so an outage never reads as a missing record: the
+  wake answers 500 and the claim stays archived for the next call. While `s3`
+  is down, the records still in `fallback` cannot be read either. One exception:
+  sandboxd cannot tell a 404 that carries no S3 error code, such as an empty or
+  HTML 404 from something in front of the store, from a missing key, so that
+  404 asks `fallback` too, and a record in neither bucket then answers not
+  found. A record whose `meta.json` is in `s3` but whose manifest or file is
+  missing answers not found without asking `fallback`, and a failure of
+  `fallback` is returned as an error, never as not found.
+- **A fetch or file read of a record `s3` lacks reads its `meta.json` in `s3`
+  a second time** before asking `fallback`. A fetch that finds the record in
+  neither bucket thus takes two GETs on `s3` and one on `fallback` instead of
+  one GET. A claim of a key with no pool, outside the egress lane, looks for a
+  promoted template under that key first, so each such claim that finds none
+  pays it.
+- **A record comes whole from one bucket,** the one that answered for its
+  `meta.json`. Only a template id can be in both, because promoting the same
+  pool key again writes the same id; the copy in `s3` wins.
+- **Every delete checks `fallback` first.** It reads the record's `meta.json`
+  there, deletes the record from `fallback` if it is present, then deletes it
+  from `s3`. If the check fails, the delete fails before it touches `s3`; the
+  delete that ends a wake then keeps its archive marker and is retried, as for
+  any failed delete. An archive read from `fallback` is therefore gone from it
+  after its wake, and the claim's next archive lands in `s3`.
+- **Labels are written beside the record's `meta.json`:** to `fallback` only
+  when `s3` lacks the record and `fallback` holds it.
+- **Listings read both buckets** in parallel and keep `s3`'s record of an id
+  both hold: the checkpoint list and the hourly checkpoint TTL sweep that uses
+  it, the reclaim of orphaned archives at start, and the template load at
+  start. If either bucket fails to list, the listing fails instead of coming
+  back short: the checkpoint list answers 500, and the TTL sweep and the orphan
+  reclaim skip that run. A node whose template load fails at start leaves every
+  template promoted before that start out of `/v1/info` and out of what it
+  gossips until its next restart, as it would with one bucket. A claim of such
+  a template still finds it by its id.
+- **The hourly generation sweep** checks each bucket's cached records against
+  that bucket.
+
+`sandboxd_store_fallback_total{store,op,result}` ([metrics](sandboxd-api.md#get-metrics))
+counts the answers of `fallback`: `hit` it answered with the record, `miss` it
+answered not found, which includes a record whose `meta.json` it holds without
+the export or file asked for, `error` it failed. `result="hit"` falls toward
+zero as old archives wake and old checkpoints are deleted; `result="error"`
+should stay at zero. A rise of `miss` with `store="checkpoints"` and
+`op="fetch"` means wakes or branches found their record in neither bucket:
+check both blocks' endpoint, bucket and prefix. With `store="templates"`, fetch
+misses are normal: each claim of a key with no pool and no promoted template
+counts one. `op="delete"` counts the check before every delete, so its misses
+grow with the deletes of records in `s3`. Each hit is also logged at Info with
+the record's id, so a template still only in `fallback` logs one at every claim
+of it, and each error is logged at Warn.
+
+**Rolling it out.** `checkpoint_store` changes only at a restart, and the cell
+can take the change one restart at a time. Until every node has restarted, a
+node without the `fallback` reads only the old bucket. It answers unknown
+sandbox (404) for a claim another node archived to the new bucket, before it
+consumes the claim's registry row, so the claim wakes once that node has
+restarted too; a checkpoint or template written to the new bucket is not found
+there either. A release or purge it runs in that window deletes nothing from
+the new bucket and leaves the record's objects there. A template it promotes in
+that window lands in the old bucket, and the other nodes serve that copy only
+while the new bucket holds none of the same id. A release of sandboxd
+without `fallback` refuses to load a config with it or with the `_env` fields,
+so a node rolled back to one needs the old config and reads only the old
+bucket.
+
+**Rolling back.** Swap the values of `s3` and `fallback`, then restart. Each
+block carries its own key env vars, endpoint and limits, so nothing else
+changes, and the records written to the new bucket stay readable through the
+fallback. Templates promoted again since the move are the exception: the
+promote wrote the new copy to the new bucket and left the older copy in the old
+one, and once the old bucket is `s3` again its copy wins, so the template
+reverts to its earlier export, owner and labels. Before the swap, delete the
+old bucket's `<prefix>tp_…/meta.json` of every template id whose `meta.json` is
+in both buckets, or promote those templates again after it.
+
+**Removing the fallback.** Nothing is copied, so a record stays in the old
+bucket until it is deleted: an archive until its claim wakes or its retention
+ends, which with `archive_delete_after_seconds` at 0 is never, a checkpoint
+until it is deleted or ages out, and a promoted template until it is deleted;
+promoting it again writes a copy to `s3` but leaves the old one. Removing
+`fallback` makes every record left only there unreadable. Keep it until a
+listing of the old bucket's `meta.json` keys under the prefix shows no record
+the cell still needs; a long stretch of `result="hit"` at zero does not show
+that. After the restart that removes it, delete
+`<data_dir>/checkpoint-staging-fallback` and
+`<data_dir>/template-staging-fallback`: they hold the node's cache of records
+fetched from the old bucket, and nothing sweeps them once the block is gone.
 
 ### A fuller config
 
@@ -916,7 +1066,8 @@ cell, then restart all of them at once. Preview URLs signed before the
 rotation stop working. `api_token` and `operator_token` also change only at a
 restart, but they rotate with rolling restarts instead (see below).
 
-- Store keys from sandboxd's environment change only at the restart;
+- Store keys from sandboxd's environment, whether the AWS chain reads them or a
+  `checkpoint_store` block names their env vars, change only at the restart;
   credentials from an instance role refresh by themselves.
 - Tenant tokens change through the [tenant API](sandboxd-api.md#tenants-v1tenants),
   with no restart.

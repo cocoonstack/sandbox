@@ -1387,7 +1387,14 @@ peer, `sandboxd_wakes_refused_total{reason}`, wakes `max_running` (`max_running`
 refused here, whether or not a hand-off ran, `sandboxd_wake_handoffs_total`,
 archived claims this node [handed to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node)
 instead, and `sandboxd_wake_memory_fallbacks_total`, archived wakes over
-`memory_limit` this node woke itself because no hand-off ran or no peer adopted. On a node with a `tun` block it adds the packet path's counters:
+`memory_limit` this node woke itself because no hand-off ran or no peer adopted. On a node whose `checkpoint_store` has a
+[`fallback`](deploy.md#moving-checkpoints-to-another-bucket) it adds
+`sandboxd_store_fallback_total{store,op,result}`, the answers of the fallback
+bucket by store view (`checkpoints`, `templates`), op (`fetch`, `fetch_file`,
+`read_meta`, `read_digest` and `set_labels` after the primary bucket had no
+such record, and `delete` for the check before every delete) and result (`hit`
+it answered with the record, `miss` it answered not found, `error` it failed); every series is
+present from the start. On a node with a `tun` block it adds the packet path's counters:
 `sandboxd_tun_frames_total{dir}` (frames on the claims' vsock streams, `out`
 from the guest and `in` to it), `sandboxd_tun_datagrams_total{dir}` (VXLAN
 datagrams), `sandboxd_tun_arp_total{kind}` (`answered` replies to exits,
