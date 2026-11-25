@@ -48,7 +48,7 @@ type Record struct {
 	Labels []byte
 }
 
-// S3Config selects the bucket of the s3 backend; credentials come from the standard AWS chain, never this config.
+// S3Config selects the bucket of the s3 backend. Its key comes from the env vars it names, else from the standard AWS chain; never from this config.
 type S3Config struct {
 	Bucket                 string `json:"bucket"`
 	Prefix                 string `json:"prefix,omitempty"`
@@ -56,6 +56,10 @@ type S3Config struct {
 	Region                 string `json:"region,omitempty"`
 	ForcePathStyle         bool   `json:"force_path_style,omitzero"`
 	UnsignedAcceptEncoding bool   `json:"unsigned_accept_encoding,omitzero"`
+
+	// AccessKeyIDEnv and SecretAccessKeyEnv name the env vars holding this store's static key; both empty keeps the AWS chain.
+	AccessKeyIDEnv     string `json:"access_key_id_env,omitempty"`
+	SecretAccessKeyEnv string `json:"secret_access_key_env,omitempty"`
 
 	UploadConcurrency   int `json:"upload_concurrency,omitzero"`
 	FetchConcurrency    int `json:"fetch_concurrency,omitzero"`

@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -120,7 +121,15 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 		t.MaxIdleConnsPerHost = idle
 		t.MaxIdleConns = max(t.MaxIdleConns, idle)
 	})
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region), awsconfig.WithHTTPClient(httpClient))
+	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(cfg.Region), awsconfig.WithHTTPClient(httpClient)}
+	if cfg.AccessKeyIDEnv != "" || cfg.SecretAccessKeyEnv != "" {
+		id, secret := os.Getenv(cfg.AccessKeyIDEnv), os.Getenv(cfg.SecretAccessKeyEnv)
+		if id == "" || secret == "" {
+			return nil, fmt.Errorf("bucket %s: env %s and %s must both hold its key", cfg.Bucket, cfg.AccessKeyIDEnv, cfg.SecretAccessKeyEnv)
+		}
+		opts = append(opts, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(id, secret, "")))
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("aws config: %w", err)
 	}

@@ -407,6 +407,33 @@ func TestAcceptEncodingIsUnsignedOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestNamedKeyEnvSignsInsteadOfTheAWSChain(t *testing.T) {
+	var mu sync.Mutex
+	var auths []string
+	fake := &fakeS3{objects: map[string][]byte{}}
+	t.Setenv("SBX_TEST_KEY_ID", "named-id")
+	t.Setenv("SBX_TEST_SECRET", "named-secret")
+	st := newTestStoreAt(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auths = append(auths, r.Header.Get("Authorization"))
+		mu.Unlock()
+		fake.ServeHTTP(w, r)
+	}), store.S3Config{AccessKeyIDEnv: "SBX_TEST_KEY_ID", SecretAccessKeyEnv: "SBX_TEST_SECRET"})
+	if _, err := st.ReadMeta(t.Context(), "ck_0123456789abcdef"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ReadMeta: %v, want ErrNotFound", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(auths) == 0 || !strings.Contains(auths[0], "Credential=named-id/") {
+		t.Errorf("Authorization = %q, want the key from SBX_TEST_KEY_ID, not AWS_ACCESS_KEY_ID", auths)
+	}
+
+	t.Setenv("SBX_TEST_SECRET", "")
+	if _, err := New(t.Context(), store.S3Config{Bucket: "b", AccessKeyIDEnv: "SBX_TEST_KEY_ID", SecretAccessKeyEnv: "SBX_TEST_SECRET"}, t.TempDir(), store.CheckpointIDRe, false); err == nil || !strings.Contains(err.Error(), "SBX_TEST_SECRET") {
+		t.Errorf("New with an empty named secret env = %v, want an error naming it", err)
+	}
+}
+
 func TestS3BackendContractRealEndpoint(t *testing.T) {
 	endpoint := os.Getenv("SANDBOX_S3_E2E")
 	if endpoint == "" {

@@ -157,14 +157,22 @@ func (s *StoreConfig) validate() error {
 	switch s.Kind {
 	case "", "dir":
 	case "s3":
-		if s.S3 == nil || s.S3.Bucket == "" {
-			return fmt.Errorf("checkpoint_store s3 needs a bucket")
-		}
-		if min(s.S3.UploadConcurrency, s.S3.FetchConcurrency, s.S3.PublishConcurrency, s.S3.MetaReadConcurrency) < 0 {
-			return fmt.Errorf("checkpoint_store s3 concurrency must not be negative")
-		}
+		return validateS3("s3", s.S3)
 	default:
 		return fmt.Errorf("checkpoint_store kind %q: want dir or s3", s.Kind)
+	}
+	return nil
+}
+
+func validateS3(block string, c *store.S3Config) error {
+	if c == nil || c.Bucket == "" {
+		return fmt.Errorf("checkpoint_store %s needs a bucket", block)
+	}
+	if min(c.UploadConcurrency, c.FetchConcurrency, c.PublishConcurrency, c.MetaReadConcurrency) < 0 {
+		return fmt.Errorf("checkpoint_store %s concurrency must not be negative", block)
+	}
+	if (c.AccessKeyIDEnv == "") != (c.SecretAccessKeyEnv == "") {
+		return fmt.Errorf("checkpoint_store %s: set both access_key_id_env and secret_access_key_env, or neither", block)
 	}
 	return nil
 }

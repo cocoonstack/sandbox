@@ -125,6 +125,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"a removed balloon block", `{"balloon":{"idle_seconds":60},"pools":[]}`, "balloon"},
 		{"negative max running", `{"max_running":-1,"pools":[]}`, "max_running"},
 		{"negative s3 concurrency", `{"checkpoint_store":{"kind":"s3","s3":{"bucket":"b","fetch_concurrency":-1}},"pools":[]}`, "concurrency must not be negative"},
+		{"s3 key id env without its secret env", `{"checkpoint_store":{"kind":"s3","s3":{"bucket":"b","access_key_id_env":"K"}},"pools":[]}`, "set both access_key_id_env and secret_access_key_env"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, `pool "": template must not be empty`},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},
