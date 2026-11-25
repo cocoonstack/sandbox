@@ -22,6 +22,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/store/fallback"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
@@ -127,6 +128,7 @@ type Manager interface {
 	SetEgressLimit(ctx context.Context, id string, l types.EgressLimit) error
 	SetBalloon(ctx context.Context, id, target string) (types.VMBalloon, error)
 	TunStats() (tunnet.Stats, bool)
+	FallbackStats() []fallback.Stat
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	AuditTokenRead(ctx context.Context, id string)

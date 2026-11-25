@@ -102,6 +102,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		metric(row.name, "counter", row.help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", row.name, row.value)
 	}
+	if stats := s.mgr.FallbackStats(); len(stats) > 0 {
+		metric("store_fallback_total", "counter", "answers of the checkpoint store's fallback bucket, by result: to reads and label writes after the primary had no such record, and to the check before every delete")
+		for _, st := range stats {
+			_, _ = fmt.Fprintf(w, "sandboxd_store_fallback_total{store=%q,op=%q,result=%q} %d\n", st.Store, st.Op, st.Result, st.Count)
+		}
+	}
 	if st, ok := s.mgr.TunStats(); ok {
 		writeTunStats(w, metric, st)
 	}

@@ -20,6 +20,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/store/fallback"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
@@ -580,6 +581,26 @@ func TestMetricsReportEachTenantsClaims(t *testing.T) {
 	if !strings.Contains(body, `sandboxd_tenant_claims{tenant="acme"} 2`) ||
 		!strings.Contains(body, `sandboxd_tenant_claims{tenant="beta"} 0`) {
 		t.Errorf("tenant gauge missing:\n%s", body)
+	}
+}
+
+func TestMetricsReportFallbackStoreAnswersOnlyWithAFallback(t *testing.T) {
+	if body := scrapeMetrics(t, newTestServer(t, "", &fakeManager{}, nil).URL); strings.Contains(body, "store_fallback") {
+		t.Errorf("a node without a fallback store reports its counter:\n%s", body)
+	}
+	mgr := &fakeManager{fallbackStats: []fallback.Stat{
+		{Store: "checkpoints", Op: "fetch", Result: "hit", Count: 3},
+		{Store: "templates", Op: "delete", Result: "error", Count: 0},
+	}}
+	body := scrapeMetrics(t, newTestServer(t, "", mgr, nil).URL)
+	for _, want := range []string{
+		"# TYPE sandboxd_store_fallback_total counter\n",
+		`sandboxd_store_fallback_total{store="checkpoints",op="fetch",result="hit"} 3` + "\n",
+		`sandboxd_store_fallback_total{store="templates",op="delete",result="error"} 0` + "\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics missing %q:\n%s", want, body)
+		}
 	}
 }
 
@@ -2594,6 +2615,7 @@ type managerEdit func(*fakeManager)
 
 type fakeManager struct {
 	counters             pool.Counters
+	fallbackStats        []fallback.Stat
 	registerVolume       func(context.Context, string, types.VolumeRegistration) error
 	unregisterVolume     func(context.Context, string) error
 	getVolumes           func(string, string) (types.SandboxVolumesResponse, error)
@@ -2999,6 +3021,8 @@ func (f *fakeManager) SetBalloon(_ context.Context, id, target string) (types.VM
 	}
 	return f.setBalloon(id, target)
 }
+
+func (f *fakeManager) FallbackStats() []fallback.Stat { return f.fallbackStats }
 
 func (f *fakeManager) TunStats() (tunnet.Stats, bool) {
 	return tunnet.Stats{}, false

@@ -16,6 +16,8 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/store/fallback"
 	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
@@ -170,6 +172,17 @@ type stamped[F any] struct {
 	Time  time.Time `json:"t"`
 	ID    string    `json:"id"`
 	Frame F         `json:",embed"`
+}
+
+// FallbackStats lists the fallback store counters of the checkpoint and template views; nil when neither reads a fallback bucket.
+func (m *Manager) FallbackStats() []fallback.Stat {
+	var out []fallback.Stat
+	for _, st := range []store.Store{m.ckpts, m.tpls} {
+		if fb, ok := st.(*fallback.Store); ok {
+			out = append(out, fb.Stats()...)
+		}
+	}
+	return out
 }
 
 func (m *Manager) Counters() Counters {
