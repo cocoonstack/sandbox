@@ -262,6 +262,33 @@ func TestLoadNextTokensThatChangeOnlyAtARestart(t *testing.T) {
 	}
 }
 
+func TestLoadCheckpointStoreFallback(t *testing.T) {
+	const (
+		r2  = `{"bucket":"new","prefix":"ck/","endpoint":"https://acct.r2.cloudflarestorage.com","access_key_id_env":"R2_ACCESS_KEY_ID","secret_access_key_env":"R2_SECRET_ACCESS_KEY"}`
+		gcs = `{"bucket":"old","prefix":"ck/","endpoint":"https://storage.googleapis.com","unsigned_accept_encoding":true,"access_key_id_env":"AWS_ACCESS_KEY_ID","secret_access_key_env":"AWS_SECRET_ACCESS_KEY"}`
+	)
+	body := func(store string) string { return `{"checkpoint_store":` + store + `,"pools":[]}` }
+	cfg := mustLoad(t, writeConfig(t, body(`{"kind":"s3","s3":`+r2+`,"fallback":`+gcs+`}`)))
+	if cs := cfg.CheckpointStore; cs.S3.Bucket != "new" || cs.Fallback == nil || cs.Fallback.Bucket != "old" || cs.Fallback.AccessKeyIDEnv != "AWS_ACCESS_KEY_ID" {
+		t.Fatalf("Load: %+v, want R2 as s3 and GCS as the fallback", cs)
+	}
+	if cfg := mustLoad(t, writeConfig(t, body(`{"kind":"s3","s3":{"bucket":"old","prefix":"ck/"}}`))); cfg.CheckpointStore.Fallback != nil {
+		t.Errorf("a config without a fallback loaded one: %+v", cfg.CheckpointStore.Fallback)
+	}
+	for _, tt := range []struct{ name, store, want string }{
+		{"on a dir store", `{"kind":"dir","fallback":` + gcs + `}`, "fallback needs kind s3"},
+		{"without a bucket", `{"kind":"s3","s3":` + r2 + `,"fallback":{"access_key_id_env":"A","secret_access_key_env":"B"}}`, "checkpoint_store fallback needs a bucket"},
+		{"with one key env", `{"kind":"s3","s3":` + r2 + `,"fallback":{"bucket":"old","access_key_id_env":"A"}}`, "checkpoint_store fallback: set both"},
+		{"on the AWS chain", `{"kind":"s3","s3":` + r2 + `,"fallback":{"bucket":"old"}}`, "must each name"},
+		{"under an s3 on the AWS chain", `{"kind":"s3","s3":{"bucket":"new"},"fallback":` + gcs + `}`, "must each name"},
+		{"at the primary's location", `{"kind":"s3","s3":` + r2 + `,"fallback":` + strings.NewReplacer(`"ck/"`, `"ck"`, `.com"`, `.com/"`).Replace(r2) + `}`, "same bucket and prefix"},
+	} {
+		if _, err := Load(writeConfig(t, body(tt.store))); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("fallback %s: %v, want %q", tt.name, err, tt.want)
+		}
+	}
+}
+
 func TestLoadArchiveFailover(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
 	parts := map[string]string{

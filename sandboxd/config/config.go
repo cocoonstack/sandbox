@@ -147,19 +147,45 @@ func (s *PoolSpec) ConfigOwned() []Field {
 	}
 }
 
-// StoreConfig selects a checkpoint backend.
+// StoreConfig selects a checkpoint backend. Fallback is the bucket a cell moves its records from: records S3 lacks are read, labeled and deleted there, and no new record is written to it.
 type StoreConfig struct {
-	Kind string          `json:"kind"`
-	S3   *store.S3Config `json:"s3,omitempty"`
+	Kind     string          `json:"kind"`
+	S3       *store.S3Config `json:"s3,omitempty"`
+	Fallback *store.S3Config `json:"fallback,omitempty"`
 }
 
 func (s *StoreConfig) validate() error {
 	switch s.Kind {
 	case "", "dir":
+		if s.Fallback != nil {
+			return fmt.Errorf("checkpoint_store fallback needs kind s3")
+		}
 	case "s3":
-		return validateS3("s3", s.S3)
+		if err := validateS3("s3", s.S3); err != nil {
+			return err
+		}
+		return s.validateFallback()
 	default:
 		return fmt.Errorf("checkpoint_store kind %q: want dir or s3", s.Kind)
+	}
+	return nil
+}
+
+func (s *StoreConfig) validateFallback() error {
+	f := s.Fallback
+	if f == nil {
+		return nil
+	}
+	if err := validateS3("fallback", f); err != nil {
+		return err
+	}
+	// A store left on the AWS chain would sign with whatever key AWS_ACCESS_KEY_ID holds, which may be the other bucket's.
+	if s.S3.AccessKeyIDEnv == "" || f.AccessKeyIDEnv == "" {
+		return fmt.Errorf("checkpoint_store with a fallback: s3 and fallback must each name access_key_id_env and secret_access_key_env")
+	}
+	same := func(a, b string) bool { return strings.TrimSuffix(a, "/") == strings.TrimSuffix(b, "/") }
+	if same(f.Endpoint, s.S3.Endpoint) && f.Bucket == s.S3.Bucket && same(f.Prefix, s.S3.Prefix) {
+		return fmt.Errorf("checkpoint_store fallback names the same bucket and prefix as s3")
 	}
 	return nil
 }

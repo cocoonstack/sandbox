@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	poolpg "github.com/cocoonstack/sandbox/sandboxd/poolset/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
+	"github.com/cocoonstack/sandbox/sandboxd/store/fallback"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
@@ -31,11 +33,11 @@ type runFunc func(context.Context)
 func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, runFunc, error) {
 	var b pool.Backends
 	var err error
-	if b.Checkpoints, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe, false); err != nil {
+	if b.Checkpoints, err = newStoreView(ctx, cfg, "checkpoints", "checkpoint-staging", store.CheckpointIDRe, false); err != nil {
 		return pool.Backends{}, nil, err
 	}
 	b.SharedCheckpoints = cfg.S3Checkpoints()
-	if b.Templates, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe, true); err != nil {
+	if b.Templates, err = newStoreView(ctx, cfg, "templates", "template-staging", store.TemplateIDRe, true); err != nil {
 		return pool.Backends{}, nil, err
 	}
 	if b.Tenants, err = openTenants(ctx, cfg); err != nil {
@@ -108,11 +110,26 @@ func usageNode(cfg *config.Config) (string, error) {
 	return os.Hostname()
 }
 
-func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp, labeled bool) (store.Store, error) {
-	if cfg.S3Checkpoints() {
-		return s3.New(ctx, *cfg.CheckpointStore.S3, filepath.Join(cfg.DataDir, staging), idRe, labeled)
+// newStoreView opens one id namespace of the checkpoint store; with a fallback bucket it wraps a second s3 store of its own, else it is the plain store.
+func newStoreView(ctx context.Context, cfg *config.Config, name, staging string, idRe *regexp.Regexp, labeled bool) (store.Store, error) {
+	if !cfg.S3Checkpoints() {
+		return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 	}
-	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
+	cs, root := cfg.CheckpointStore, filepath.Join(cfg.DataDir, staging)
+	primary, err := s3.New(ctx, *cs.S3, root, idRe, labeled)
+	if err != nil {
+		return nil, err
+	}
+	if cs.Fallback == nil {
+		return primary, nil
+	}
+	fb, err := s3.New(ctx, *cs.Fallback, root+"-fallback", idRe, labeled)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint_store fallback: %w", err)
+	}
+	log.WithFunc("main.newStoreView").Infof(ctx, "%s: writing to bucket %s at %s; reading bucket %s at %s for records it lacks",
+		name, cs.S3.Bucket, cmp.Or(cs.S3.Endpoint, "the AWS default"), cs.Fallback.Bucket, cmp.Or(cs.Fallback.Endpoint, "the AWS default"))
+	return fallback.New(name, primary, fb), nil
 }
 
 func openTenants(ctx context.Context, cfg *config.Config) (tenants.Source, error) {
