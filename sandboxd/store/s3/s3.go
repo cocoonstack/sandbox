@@ -251,7 +251,7 @@ func (s *Store) Metas(ctx context.Context, prefix string) ([]store.Record, error
 					return err
 				}
 			}
-			recs[i] = store.Record{Meta: raw, Digest: digest, Labels: labels}
+			recs[i] = store.Record{ID: id, Meta: raw, Digest: digest, Labels: labels}
 			return nil
 		})
 	}

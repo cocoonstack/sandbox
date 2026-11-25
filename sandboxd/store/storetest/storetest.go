@@ -104,6 +104,131 @@ func RunContract(t *testing.T, st store.Store) {
 	runPrefixContract(t, st)
 }
 
+// RunFallbackContract drives wrapped, a store over primary and fallback, through records only the fallback holds, records it writes, and an id both hold; every store must be labeled and empty.
+func RunFallbackContract(t *testing.T, primary, fallback, wrapped store.Store) {
+	t.Helper()
+	runFallbackOnlyContract(t, fallback, wrapped)
+	written := runFallbackWriteContract(t, primary, fallback, wrapped)
+	runFallbackShadowContract(t, primary, fallback, wrapped, written)
+}
+
+// runFallbackOnlyContract reads, labels, lists and deletes a record only the fallback holds.
+func runFallbackOnlyContract(t *testing.T, fallback, wrapped store.Store) {
+	t.Helper()
+	ctx := t.Context()
+	const old = "ck_00000000000000f1"
+	publishRecord(t, fallback, old, MetaJSON(old), "disk.img", "from-fallback")
+	if raw, err := wrapped.ReadMeta(ctx, old); err != nil || string(raw) != MetaJSON(old) {
+		t.Fatalf("ReadMeta of a fallback record: %q, %v", raw, err)
+	}
+	if digest, err := wrapped.ReadDigest(ctx, old); err != nil || digest != "" {
+		t.Fatalf("ReadDigest of a fallback record: %q, %v; want its empty digest", digest, err)
+	}
+	dir, meta, _, err := wrapped.Fetch(ctx, old)
+	if err != nil || string(meta) != MetaJSON(old) {
+		t.Fatalf("Fetch of a fallback record: %q, %v", meta, err)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(dir, "disk.img")); readErr != nil || string(got) != "from-fallback" { //nolint:gosec // test path
+		t.Fatalf("fetched fallback export: %q, %v", got, readErr)
+	}
+	dst := filepath.Join(t.TempDir(), "file")
+	if err = wrapped.FetchFile(ctx, old, "disk.img", dst); err != nil {
+		t.Fatalf("FetchFile of a fallback record: %v", err)
+	}
+	if got, readErr := os.ReadFile(dst); readErr != nil || string(got) != "from-fallback" { //nolint:gosec // test path
+		t.Fatalf("fetched fallback file: %q, %v", got, readErr)
+	}
+	if err = wrapped.SetLabels(ctx, old, []byte(`{"a":"1"}`)); err != nil {
+		t.Fatalf("SetLabels of a fallback record: %v", err)
+	}
+	for which, st := range map[string]store.Store{"fallback": fallback, "wrapped": wrapped} {
+		recs, metasErr := st.Metas(ctx, "")
+		if metasErr != nil || len(recs) != 1 || recs[0].ID != old || string(recs[0].Labels) != `{"a":"1"}` {
+			t.Fatalf("%s Metas: %+v, %v; want %s once, labeled beside its meta", which, recs, metasErr, old)
+		}
+	}
+	if err = wrapped.Delete(ctx, old); err != nil {
+		t.Fatalf("Delete of a fallback record: %v", err)
+	}
+	requireAbsent(t, fallback, "fallback", old)
+	if _, _, _, err = wrapped.Fetch(ctx, old); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Fetch after Delete of a fallback record: %v, want store.ErrNotFound", err)
+	}
+}
+
+// runFallbackWriteContract publishes through wrapped and returns the ids it wrote, which must land in the primary only.
+func runFallbackWriteContract(t *testing.T, primary, fallback, wrapped store.Store) []string {
+	t.Helper()
+	ctx := t.Context()
+	const fresh, digested = "ck_00000000000000f2", "ck_00000000000000f4"
+	publishRecord(t, wrapped, fresh, MetaJSON(fresh), "disk.img", "new")
+	if _, err := PublishDigested(ctx, wrapped, StageRecord(t, wrapped, digested, MetaJSON(digested), "disk.img", "new"), digested); err != nil {
+		t.Fatalf("PublishDigested: %v", err)
+	}
+	for _, id := range []string{fresh, digested} {
+		if _, err := primary.ReadMeta(ctx, id); err != nil {
+			t.Fatalf("primary ReadMeta of %s written through the wrapper: %v", id, err)
+		}
+		requireAbsent(t, fallback, "fallback", id)
+	}
+	return []string{fresh, digested}
+}
+
+// runFallbackShadowContract checks an id both stores hold, as a template promoted again after the move, reads as the primary's copy; it then deletes that id and written from both.
+func runFallbackShadowContract(t *testing.T, primary, fallback, wrapped store.Store, written []string) {
+	t.Helper()
+	ctx := t.Context()
+	const both = "ck_00000000000000f3"
+	staging := StageRecord(t, fallback, both, `{"id":"`+both+`","v":"old"}`, "disk.img", "older")
+	writeExport(t, staging, "old-only.img", "stale")
+	if err := fallback.Publish(ctx, staging, both, ""); err != nil {
+		t.Fatalf("publish the fallback copy: %v", err)
+	}
+	if err := fallback.SetLabels(ctx, both, []byte(`{"from":"fallback"}`)); err != nil {
+		t.Fatalf("label the fallback copy: %v", err)
+	}
+	publishRecord(t, primary, both, `{"id":"`+both+`","v":"new"}`, "disk.img", "newer")
+	if raw, readErr := wrapped.ReadMeta(ctx, both); readErr != nil || string(raw) != `{"id":"`+both+`","v":"new"}` {
+		t.Fatalf("ReadMeta of an id both hold: %q, %v; want the primary's", raw, readErr)
+	}
+	dir, _, _, err := wrapped.Fetch(ctx, both)
+	if err != nil {
+		t.Fatalf("Fetch of an id both hold: %v", err)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(dir, "disk.img")); readErr != nil || string(got) != "newer" { //nolint:gosec // test path
+		t.Fatalf("fetched export of an id both hold: %q, %v; want the primary's", got, readErr)
+	}
+	if err = wrapped.FetchFile(ctx, both, "old-only.img", filepath.Join(t.TempDir(), "old")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("FetchFile of a file only the fallback copy has: %v, want store.ErrNotFound from the primary's record", err)
+	}
+	recs, err := wrapped.Metas(ctx, "")
+	if err != nil || len(recs) != 1+len(written) {
+		t.Fatalf("Metas with an id in both: %+v, %v; want %d records", recs, err, 1+len(written))
+	}
+	for _, r := range recs {
+		if r.ID == both && (string(r.Meta) != `{"id":"`+both+`","v":"new"}` || r.Labels != nil) {
+			t.Fatalf("Metas record of an id both hold: %q labels %q, want the primary's, unlabeled", r.Meta, r.Labels)
+		}
+	}
+	for _, id := range append([]string{both}, written...) {
+		if err = wrapped.Delete(ctx, id); err != nil {
+			t.Fatalf("Delete %s: %v", id, err)
+		}
+		requireAbsent(t, primary, "primary", id)
+		requireAbsent(t, fallback, "fallback", id)
+	}
+	if recs, err = wrapped.Metas(ctx, ""); err != nil || len(recs) != 0 {
+		t.Fatalf("Metas after every Delete: %+v, %v", recs, err)
+	}
+}
+
+func requireAbsent(t *testing.T, st store.Store, which, id string) {
+	t.Helper()
+	if _, err := st.ReadMeta(t.Context(), id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("%s ReadMeta %s: %v, want store.ErrNotFound", which, id, err)
+	}
+}
+
 // PublishDigested prepares and commits a digested record in one call.
 func PublishDigested(ctx context.Context, st store.Store, staging, id string) (string, error) {
 	digest, commit, err := st.PrepareDigested(ctx, staging, id, "")
@@ -326,8 +451,8 @@ func runPrefixContract(t *testing.T, st store.Store) {
 	publishRecord(t, st, archive, MetaJSON(archive), "disk.img", "archive")
 	for prefix, want := range map[string]string{store.CheckpointPrefix: ckpt, store.ArchivePrefix: archive} {
 		recs, err := st.Metas(ctx, prefix)
-		if err != nil || len(recs) != 1 || string(recs[0].Meta) != MetaJSON(want) {
-			t.Fatalf("Metas %s: %d records, %v; want only %s", prefix, len(recs), err, want)
+		if err != nil || len(recs) != 1 || string(recs[0].Meta) != MetaJSON(want) || recs[0].ID != want {
+			t.Fatalf("Metas %s: %+v, %v; want only %s, with its id", prefix, recs, err, want)
 		}
 	}
 	for _, id := range []string{ckpt, archive} {

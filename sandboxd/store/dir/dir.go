@@ -204,7 +204,7 @@ func (d *Store) readRecord(ctx context.Context, id string) (store.Record, error)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return store.Record{}, fmt.Errorf("read labels: %w", err)
 	}
-	return store.Record{Meta: raw, Digest: digest, Labels: labels}, nil
+	return store.Record{ID: id, Meta: raw, Digest: digest, Labels: labels}, nil
 }
 
 func (d *Store) publish(_ context.Context, staging, id, digest string) error {

@@ -41,8 +41,9 @@ var (
 	TemplateIDRe   = regexp.MustCompile(`^tp_[0-9a-f]{32}$`)
 )
 
-// Record is one published record's metadata, its export digest (empty when published undigested) and its labels, nil when none are set.
+// Record is one published record's id, metadata, export digest (empty when published undigested) and labels, nil when none are set.
 type Record struct {
+	ID     string
 	Meta   []byte
 	Digest string
 	Labels []byte
