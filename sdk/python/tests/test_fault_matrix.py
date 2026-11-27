@@ -222,6 +222,28 @@ def test_lookup_all_miss(spawn_node, dead_addr):
     assert exc.value.status == 404 and "no owner found" in exc.value.message
 
 
+def test_lookup_raises_a_node_error_instead_of_no_owner(spawn_node):
+    gate = threading.Event()
+
+    def late_miss(body, path):
+        gate.wait(60)
+        return 404, {"error": "not here"}
+
+    down = spawn_node(
+        {("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (503, {"error": "archive registry down; retry"})}
+    )
+    entry = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): late_miss,
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [down]}),
+        }
+    )
+    threading.Timer(0.3, gate.set).start()
+    with pytest.raises(APIError) as exc:
+        Client(entry).lookup("sb_1", "tok")
+    assert exc.value.status == 503 and "retry" in exc.value.message, exc.value
+
+
 @pytest.mark.parametrize("retired", [False, True], ids=["old_node_404", "old_node_retired"])
 def test_close_releases_a_sandbox_that_moved(spawn_node, dead_addr, retired):
     released = []

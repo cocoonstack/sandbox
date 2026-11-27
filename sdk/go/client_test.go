@@ -674,6 +674,30 @@ func TestLookupReportsAFailedPeerDiscovery(t *testing.T) {
 	}
 }
 
+func TestLookupReturnsANodeErrorInsteadOfNoOwner(t *testing.T) {
+	down := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"error":"archive registry down; retry"}`)
+	})
+	entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sandboxes/sb_1/owner":
+			w.WriteHeader(http.StatusNotFound)
+		case "/v1/peers":
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(down)}})
+		}
+	})
+
+	_, err := testClient(t, entry).Lookup(t.Context(), "sb_1", "tok")
+	he, ok := errors.AsType[*APIError](err)
+	if !ok || he.Verb != "owner" || he.Status != http.StatusServiceUnavailable {
+		t.Fatalf("Lookup: %v, want the peer's 503 from the owner probe", err)
+	}
+	if strings.Contains(err.Error(), "no owner found") {
+		t.Errorf("Lookup: %v, want no verdict that the sandbox has no owner", err)
+	}
+}
+
 func TestAPIErrorDrainsOversizedBody(t *testing.T) {
 	body := strings.NewReader(`{"error":"` + strings.Repeat("x", 3*4096) + `"}`)
 	err := apiError("claim", &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(body)})
