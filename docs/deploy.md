@@ -440,9 +440,10 @@ config error.
 | `fetch_attempts` | 3 | requests per chunk, the first included; 1 turns the retry off |
 | `fetch_retry_backoff_ms` | 200 | wait before retry *n* is *n* times this |
 
-Each retry logs a warning with the chunk key and the read error. A missing
-chunk, a checksum or length mismatch and a local write error fail the fetch
-on the first attempt.
+Each retry logs a warning with the chunk key and the read error. Three
+failures are not retried and fail the fetch on the first attempt: a missing
+chunk, a local write error, and a body that arrives whole but whose length or
+SHA-256 differs from the manifest.
 
 ### Reclaiming S3 storage
 
