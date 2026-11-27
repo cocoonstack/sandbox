@@ -173,6 +173,7 @@ impl State {
                 auth,
             } => {
                 git::clone(
+                    &mut reader,
                     writer,
                     &url,
                     &path,
@@ -190,10 +191,10 @@ impl State {
                 author,
             } => git::commit(writer, &path, &message, &author).await,
             Request::GitPush { path, auth } => {
-                git::net_verb(writer, &path, auth.as_deref(), "push").await
+                git::net_verb(&mut reader, writer, &path, auth.as_deref(), "push").await
             }
             Request::GitPull { path, auth } => {
-                git::net_verb(writer, &path, auth.as_deref(), "pull").await
+                git::net_verb(&mut reader, writer, &path, auth.as_deref(), "pull").await
             }
             Request::GitBranch { path, action, name } => {
                 git::branch(writer, &path, action, name.as_deref()).await
