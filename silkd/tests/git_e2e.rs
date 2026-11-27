@@ -3,9 +3,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
-use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
 
-use common::{assert_error, request, type_of};
+use serde_json::{Value, json};
+use silkd::server::State;
+
+use common::{
+    assert_error, bind_local, connect_with, frames_until, request, type_of, under_deadline,
+};
 
 fn git(dir: &std::path::Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
@@ -30,6 +36,11 @@ fn init_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q", "-b", "main"]);
     dir
+}
+
+async fn call(frame: Value) -> Vec<Value> {
+    let (_cw, mut lines, _handle) = connect_with(&Arc::new(State::new()), frame).await;
+    frames_until(&mut lines, |f| matches!(type_of(f), "done" | "error")).await
 }
 
 fn chown_tree(dir: &std::path::Path, uid: u32) {
@@ -141,7 +152,7 @@ async fn clone_copies_a_repository() {
     git(src.path(), &["commit", "-qm", "init"]);
     let dst = tempfile::tempdir().unwrap();
     let target = dst.path().join("clone");
-    let ok = request(json!({
+    let ok = call(json!({
         "op":"git_clone", "url": src.path().to_str().unwrap(), "path": target.to_str().unwrap()
     }))
     .await;
@@ -150,9 +161,39 @@ async fn clone_copies_a_repository() {
 }
 
 #[tokio::test]
+async fn a_hang_up_ends_a_stalled_clone_and_removes_its_directory() {
+    let (silent, port) = bind_local().await;
+    let dst = tempfile::tempdir().unwrap();
+    let target = dst.path().join("clone");
+    let (cw, lines, handle) = connect_with(
+        &Arc::new(State::new()),
+        json!({
+            "op":"git_clone", "url": format!("http://127.0.0.1:{port}/r.git"), "path": target.to_str().unwrap()
+        }),
+    )
+    .await;
+    let _dialed = under_deadline(silent.accept()).await.expect("git dials");
+    assert!(
+        target.exists(),
+        "a clone makes its directory before it dials"
+    );
+    drop((cw, lines));
+    under_deadline(async {
+        while target.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    under_deadline(handle)
+        .await
+        .expect("serve task")
+        .expect("a hang-up is a clean end");
+}
+
+#[tokio::test]
 async fn clone_reads_a_dash_leading_url_as_the_repository() {
     let dst = tempfile::tempdir().unwrap();
-    let frames = request(json!({
+    let frames = call(json!({
         "op":"git_clone", "url": "--quiet", "path": dst.path().join("clone").to_str().unwrap()
     }))
     .await;

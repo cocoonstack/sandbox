@@ -2,8 +2,9 @@
 
 use std::os::unix::process::ExitStatusExt;
 use std::process::Stdio;
+use std::time::Duration;
 
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::process::Command;
 
 use crate::proto::{self, ErrorKind, GitBranchOp, GitFileStatus, Response};
@@ -12,16 +13,22 @@ use crate::sysutil;
 /// Estimated JSON bytes of file entries one status frame carries before it truncates; an eighth of the frame cap leaves room for escaping.
 const STATUS_FILES_BYTES: usize = proto::MAX_FRAME / 8;
 const STATUS_ENTRY_OVERHEAD: usize = 40;
+const HANG_UP_GRACE: Duration = Duration::from_secs(10);
 
-/// Clones `url` into `path` (optionally a branch, shallow depth), then Done.
-pub async fn clone<W: AsyncWrite + Unpin>(
+/// Clones `url` into `path` (optionally a branch, shallow depth), then Done; a hang-up ends the clone.
+pub async fn clone<R, W>(
+    reader: &mut R,
     w: &mut W,
     url: &str,
     path: &str,
     branch: Option<&str>,
     depth: Option<u32>,
     auth: Option<&str>,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let depth_arg;
     let mut args: Vec<&str> = vec!["clone"];
     if let Some(b) = branch {
@@ -33,7 +40,9 @@ pub async fn clone<W: AsyncWrite + Unpin>(
     }
     args.extend(["--", url, path]);
     // clone has no repo dir yet.
-    let out = git(".", auth, &args).await;
+    let Some(out) = git_bound(reader, git_cmd(".", auth).args(&args)).await else {
+        return Ok(());
+    };
     terminal(w, "clone", &out).await
 }
 
@@ -82,14 +91,21 @@ pub async fn commit<W: AsyncWrite + Unpin>(
     proto::write_frame(w, &Response::GitCommitResult { hash }).await
 }
 
-/// Runs `push` or `pull` on the current branch.
-pub async fn net_verb<W: AsyncWrite + Unpin>(
+/// Runs `push` or `pull` on the current branch; a hang-up ends it.
+pub async fn net_verb<R, W>(
+    reader: &mut R,
     w: &mut W,
     path: &str,
     auth: Option<&str>,
     verb: &str,
-) -> std::io::Result<()> {
-    let out = git(path, auth, &[verb]).await;
+) -> std::io::Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let Some(out) = git_bound(reader, git_cmd(path, auth).arg(verb)).await else {
+        return Ok(());
+    };
     terminal(w, verb, &out).await
 }
 
@@ -150,11 +166,44 @@ async fn git(dir: &str, auth: Option<&str>, args: &[&str]) -> std::process::Outp
 }
 
 async fn git_output(cmd: &mut Command) -> std::process::Output {
-    cmd.output().await.unwrap_or_else(|e| std::process::Output {
+    cmd.output().await.unwrap_or_else(spawn_failed)
+}
+
+async fn git_bound<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    cmd: &mut Command,
+) -> Option<std::process::Output> {
+    let child = match cmd.process_group(0).spawn() {
+        Ok(child) => child,
+        Err(e) => return Some(spawn_failed(e)),
+    };
+    let pgid = child.id();
+    let output = child.wait_with_output();
+    tokio::pin!(output);
+    let hung_up = tokio::select! {
+        out = &mut output => return Some(out.unwrap_or_else(spawn_failed)),
+        buffered = reader.fill_buf() => !buffered.is_ok_and(|buf| !buf.is_empty()),
+    };
+    let (true, Some(pgid)) = (hung_up, pgid) else {
+        return Some(output.await.unwrap_or_else(spawn_failed));
+    };
+    sysutil::signal_group(pgid, libc::SIGTERM);
+    if tokio::time::timeout(HANG_UP_GRACE, &mut output)
+        .await
+        .is_err()
+    {
+        sysutil::signal_group(pgid, libc::SIGKILL);
+        let _ = output.await;
+    }
+    None
+}
+
+fn spawn_failed(e: std::io::Error) -> std::process::Output {
+    std::process::Output {
         status: std::process::ExitStatus::from_raw(127 << 8),
         stdout: Vec::new(),
         stderr: format!("spawn git: {e}").into_bytes(),
-    })
+    }
 }
 
 fn apply_config(cmd: &mut Command, auth: Option<&str>) {
