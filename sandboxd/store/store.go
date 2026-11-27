@@ -64,6 +64,7 @@ type S3Config struct {
 
 	FetchAttempts       int `json:"fetch_attempts,omitzero"`
 	FetchRetryBackoffMs int `json:"fetch_retry_backoff_ms,omitzero"`
+	StallTimeoutMs      int `json:"stall_timeout_ms,omitzero"`
 }
 
 // CommitFunc makes a prepared generation the record's current one.

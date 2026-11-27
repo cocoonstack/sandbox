@@ -127,6 +127,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"negative s3 concurrency", `{"checkpoint_store":{"kind":"s3","s3":{"bucket":"b","fetch_concurrency":-1}},"pools":[]}`, "concurrency must not be negative"},
 		{"negative s3 fetch attempts", `{"checkpoint_store":{"kind":"s3","s3":{"bucket":"b","fetch_attempts":-1}},"pools":[]}`, "fetch_attempts"},
 		{"negative s3 fetch backoff", `{"checkpoint_store":{"kind":"s3","s3":{"bucket":"b","fetch_retry_backoff_ms":-1}},"pools":[]}`, "fetch_retry_backoff_ms"},
+		{"negative s3 stall timeout", `{"checkpoint_store":{"kind":"s3","s3":{"bucket":"b","stall_timeout_ms":-1}},"pools":[]}`, "stall_timeout_ms"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, `pool "": template must not be empty`},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},

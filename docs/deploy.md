@@ -427,23 +427,33 @@ of `upload_concurrency`, `fetch_concurrency` and `meta_read_concurrency` (at
 least 10) idle connections to the store, so a raised limit reuses its
 connections across transfers instead of opening new ones.
 
-### S3 fetch retries
+### S3 retries and stall bounds
 
-A chunk download whose body stops mid-read (`unexpected EOF`, a reset
-connection) is requested again; the AWS SDK retries a failed request itself
-and never a body it already returned. Two optional `checkpoint_store.s3`
-fields set the bound. Zero or absent keeps the default; a negative value is a
-config error.
+The AWS SDK retries a failed request itself, and never a body it already
+returned. sandboxd closes the three gaps that leaves:
+
+- A download whose body stops mid-read (`unexpected EOF`, a reset connection)
+  is requested again. This covers chunks and the meta and manifest reads.
+- A download body that delivers no bytes for `stall_timeout_ms` is abandoned
+  and requested again. A body that is slow but keeps flowing is never cut.
+- A request that gets no response headers within `stall_timeout_ms` fails,
+  and the SDK retries it. This covers every call: downloads, uploads,
+  listings and deletes. A listing or a delete whose reply is cut mid-body is
+  also retried by the SDK.
+
+Three optional `checkpoint_store.s3` fields set the bounds. Zero or absent
+keeps the default; a negative value is a config error.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `fetch_attempts` | 3 | requests per chunk, the first included; 1 turns the retry off |
+| `fetch_attempts` | 3 | requests per download, the first included; 1 turns the retry off |
 | `fetch_retry_backoff_ms` | 200 | wait before retry *n* is *n* times this |
+| `stall_timeout_ms` | 30000 | longest wait for response headers, and longest gap between body bytes |
 
-Each retry logs a warning with the chunk key and the read error. Three
-failures are not retried and fail the fetch on the first attempt: a missing
-chunk, a local write error, and a body that arrives whole but whose length or
-SHA-256 differs from the manifest.
+Each retry of a download logs a warning with the object key and the read
+error. Three failures are not retried and fail the fetch on the first attempt:
+a missing chunk, a local write error, and a body that arrives whole but whose
+length or SHA-256 differs from the manifest.
 
 ### Reclaiming S3 storage
 
