@@ -1368,7 +1368,8 @@ promoted from, and a claim made with
 `"egress": false` keeps no egress. The claim's tun state does not change: one that
 enters a `tun` pool holds no overlay address until
 [`PUT /v1/sandboxes/{id}/tun`](#put-v1sandboxesidtun) enables it. The guest keeps its disk, so nothing a pool
-does when it builds a VM (the image, the warmup) is applied again. A resize
+does when it builds a VM (the image, the warmup, the cell CA an intercepting
+pool bakes) is applied again. A resize
 to the claim's own size is accepted: it grows the disk to the pool's
 `storage` and cold-boots the claim.
 
@@ -1391,12 +1392,12 @@ size, a wake restores the snapshot and its size, and the same resize can be
 sent again. Once it has taken the key, the old memory image can no longer
 run: a cold boot that fails answers 500, and the claim is then one whose VMM
 is down, restarted or failed by the rows of
-[dead VMMs](deploy.md#dead-vmms-and-host-restarts). A call that waited to
-wake the claim while it resized answers 503
-`sandbox changed while the call waited; retry`, and a control call that
-waited for it answers 404; send either again. With `archive_failover`, a replica taken before the resize holds
+[dead VMMs](deploy.md#dead-vmms-and-host-restarts). A call that waited for
+the claim while it resized answers 503
+`sandbox changed while the call waited; retry`; send it again. With `archive_failover`, a replica taken before the resize holds
 the old size until the next one replaces it, and a failover in that window
-brings the claim back at its old size and key.
+brings the claim back at its old size and key. Its `adopt` usage event
+carries that shape; send the resize again.
 
 204 on success; 400 an unknown `size` or an unknown field; 404 unknown id;
 409 `sandbox cannot resize` with the reason: the claim is not hibernated
@@ -1478,9 +1479,9 @@ Always on: every lifecycle transition appends one JSONL event to
 "claim|renew|hibernate|wake|fork|checkpoint|adopt|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed|move_in|move_out|resize",
 "id": "sb_…"}` plus `vm` (the VM's name; absent on `renew`, `adopt`, `archive`,
 `unarchive`, `archive_delete`, `egress`, `egress_bytes`, and the `reap` or
-`release` of an archived claim), `key` (the pool key's stable hash, `claim`
-and `resize` events), `template`, `net` and `size` (the claim's template, lane and size
-tier, `claim` and `resize` events, so a consumer can price a sandbox by its shape without the
+`release` of an archived claim), `key` (the pool key's stable hash, `claim`,
+`resize` and `adopt` events), `template`, `net` and `size` (the claim's template, lane and size
+tier, `claim`, `resize` and `adopt` events, so a consumer can price a sandbox by its shape without the
 claim record, which is gone after release; `size` sets the CPU and memory,
 and `template` is a label, since promote lets the caller name it), `deadline` (the deadline in force after this event: `claim`,
 `renew`, `wake`, `unarchive`, `move_in` and `resize` carry the lease, `archive` and `adopt` the retention
@@ -1512,7 +1513,9 @@ An event ends the current span at its `t` and enters a state: `claim`, `wake`,
 `reap`, `adopt` and `archive_delete` have the exceptions below. A
 [`resize`](#post-v1sandboxesidresize) changes no state either: from its `t` on, the sandbox has
 the shape in its `key`, `template`, `net` and `size`, and the `vmm_restart` that follows it
-enters `running` at that shape.
+enters `running` at that shape. An `adopt` carries the shape of the checkpoint the node took over,
+and the sandbox has that shape from its `t` on: a failover to a replica taken before a resize
+brings the old shape back.
 Billable compute, hibernated storage and archived storage seconds are the time
 in `running`, `hibernated` and `archived`, a cheaper store tier than a hibernated
 VM's RAM. `vmm_exit` is stamped when the node first finds the VMM gone, so an

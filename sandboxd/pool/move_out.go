@@ -450,16 +450,21 @@ func (m *Manager) lockServing(sb *types.Sandbox) error {
 }
 
 func (m *Manager) lockTransition(sb *types.Sandbox) error {
-	midMove := func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.midMoveLocked(sb)
-	}
-	if midMove() {
+	m.mu.Lock()
+	moving := m.midMoveLocked(sb)
+	m.mu.Unlock()
+	if moving {
 		return ErrEvacuating
 	}
 	sb.Transition.Lock()
-	if midMove() {
+	m.mu.Lock()
+	cur, moving := m.claimed[sb.ID], m.midMoveLocked(sb)
+	m.mu.Unlock()
+	switch {
+	case cur != nil && cur != sb:
+		sb.Transition.Unlock()
+		return ErrReplaced
+	case moving:
 		sb.Transition.Unlock()
 		return ErrEvacuating
 	}

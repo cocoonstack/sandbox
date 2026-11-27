@@ -113,7 +113,10 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 		}
 		return false, fmt.Errorf("adopt %s: persist claims: %w", id, err)
 	}
-	m.recordUsage(ctx, usage.Event{Time: adoptedAt, Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: retention})
+	m.recordUsage(ctx, usage.Event{
+		Time: adoptedAt, Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: retention,
+		KeyHash: sb.Key.Hash(), Template: sb.Key.Template, Net: string(sb.Key.Net), Size: string(sb.Key.Size),
+	})
 	log.WithFunc("pool.adoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
 	return true, nil
 }

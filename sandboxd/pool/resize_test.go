@@ -227,8 +227,9 @@ func TestCallsThatMeetAResizeNeverRestoreTheOldMemoryImage(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	cred := Cred{Token: sb.Token}
-	results := make(chan error, 3)
+	results, waited := make(chan error, 3), make(chan error, 1)
 	eng.resizeHook = func() {
+		go func() { waited <- m.lockTransition(sb) }()
 		go func() { _, err := m.wakeResolved(t.Context(), sb); results <- err }()
 		go func() { _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, cred); results <- err }()
 		go func() { _, err := m.Renew(t.Context(), sb.ID, cred, time.Hour, ""); results <- err }()
@@ -243,6 +244,9 @@ func TestCallsThatMeetAResizeNeverRestoreTheOldMemoryImage(t *testing.T) {
 		if err := <-results; err != nil && !errors.Is(err, ErrReplaced) {
 			t.Errorf("a call that met the resize = %v, want success or the retry a replaced record answers", err)
 		}
+	}
+	if err := <-waited; !errors.Is(err, ErrReplaced) {
+		t.Errorf("a control call that waited for the resize = %v, want the retry a replaced record answers", err)
 	}
 	if got, _ := m.Sandbox(sb.ID); got.Key != xlargeKey || got.Hibernated || len(eng.restores) != 0 {
 		t.Errorf("summary %+v with restores %v, want the running xlarge claim and no restore", got, eng.restores)
@@ -265,6 +269,30 @@ func TestAResizeThatAnEvacuationOvertakesLeavesTheClaimForIt(t *testing.T) {
 	}
 
 	assertUnresized(t, m, eng, sb)
+}
+
+func TestAFailoverBeforeTheNextReplicaBringsAResizedClaimBackAtItsOldShape(t *testing.T) {
+	c := newReplicaCluster(t)
+	a, b := c.pair(t)
+	if err := a.SetPools(t.Context(), []config.PoolSpec{{PoolKey: xlargeKey}}); err != nil {
+		t.Fatalf("add the xlarge pool: %v", err)
+	}
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	hibernateClaim(t, a, sb)
+	if err := a.Resize(t.Context(), sb.ID, types.SizeXLarge); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+
+	c.expire("a")
+	mustAdopt(t, b, sb, "adopt the replica taken before the resize")
+
+	moved, _ := b.byID(sb.ID)
+	evs := usageJournal(t, b)
+	last := evs[len(evs)-1]
+	if moved.Key != testKey || last.Event != "adopt" || last.KeyHash != testKey.Hash() || last.Template != testKey.Template || last.Net != string(testKey.Net) || last.Size != string(testKey.Size) {
+		t.Errorf("adopted key %+v with last event %+v, want the claim back at its old key and an adopt that carries that shape", moved.Key, last)
+	}
 }
 
 func TestAResizeThatCocoonRefusesChangesNothing(t *testing.T) {
