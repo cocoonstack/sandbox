@@ -77,6 +77,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrPaused, http.StatusConflict, ""},
 	{pool.ErrTunRaced, http.StatusConflict, ""},
 	{pool.ErrFailed, http.StatusConflict, ""},
+	{pool.ErrNotResizable, http.StatusConflict, ""},
 	{pool.ErrNoInstanceMetadata, http.StatusConflict, ""},
 	{pool.ErrBalloonOff, http.StatusConflict, ""},
 	{pool.ErrNoBalloon, http.StatusConflict, ""},
@@ -126,6 +127,7 @@ type Manager interface {
 	SetTun(ctx context.Context, id string, enabled *bool, profile *string) error
 	SetEgressLimit(ctx context.Context, id string, l types.EgressLimit) error
 	SetBalloon(ctx context.Context, id, target string) (types.VMBalloon, error)
+	Resize(ctx context.Context, id string, size types.Size) error
 	TunStats() (tunnet.Stats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
@@ -363,6 +365,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/tun", s.requireRoot(s.handleSetTun))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/egress-limit", s.requireRoot(s.handleSetEgressLimit))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/balloon", s.requireRoot(s.handleSetBalloon))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/resize", s.requireRoot(s.handleResize))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/env", s.requireToken(s.handleGetEnv))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/env", s.requireToken(s.handleSetEnv))
 	mux.HandleFunc("PATCH /v1/sandboxes/{id}/env", s.requireToken(s.handlePatchEnv))
@@ -710,6 +713,16 @@ func (s *Server) handleSetBalloon(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	b, err := s.mgr.SetBalloon(r.Context(), id, req.Target)
 	writeResult(w, r, "balloon", id, "balloon failed", err, func() { writeJSON(w, http.StatusOK, b) })
+}
+
+func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBodyStrict[ResizeRequest](w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	err := s.mgr.Resize(r.Context(), id, req.Size)
+	writeResult(w, r, "resize", id, "resize failed", err, noContent(w))
 }
 
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {

@@ -160,6 +160,11 @@ func (e *Engine) Start(ctx context.Context, name string) error {
 	return err
 }
 
+func (e *Engine) Resize(ctx context.Context, name string, spec types.SizeSpec) error {
+	_, err := e.run(ctx, "vm", "resize", "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory, name)
+	return err
+}
+
 // Stop force-stops a VM and keeps its disk for a later Start.
 func (e *Engine) Stop(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "stop", "--force", name)

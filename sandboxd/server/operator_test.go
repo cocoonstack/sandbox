@@ -89,6 +89,7 @@ func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
 		{"POST /v1/sandboxes/{id}/wake", "/v1/sandboxes/sb_1/wake", "", true, http.StatusNoContent, http.StatusNotFound},
 		{"POST /v1/sandboxes/{id}/renew", "/v1/sandboxes/sb_1/renew", "", true, http.StatusOK, http.StatusNotFound},
 		{"POST /v1/sandboxes/{id}/balloon", "/v1/sandboxes/sb_1/balloon", `{"target":"50%"}`, true, http.StatusOK, http.StatusForbidden},
+		{"POST /v1/sandboxes/{id}/resize", "/v1/sandboxes/sb_1/resize", `{"size":"xlarge"}`, true, http.StatusNoContent, http.StatusForbidden},
 		{"GET /v1/sandboxes/{id}/env", "/v1/sandboxes/sb_1/env", "", true, http.StatusOK, http.StatusOK},
 		{"PUT /v1/sandboxes/{id}/env", "/v1/sandboxes/sb_1/env", `{"env":{}}`, true, http.StatusNoContent, http.StatusNoContent},
 		{"PATCH /v1/sandboxes/{id}/env", "/v1/sandboxes/sb_1/env", `{"env":{}}`, true, http.StatusNoContent, http.StatusNoContent},

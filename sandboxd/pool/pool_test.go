@@ -1508,6 +1508,7 @@ type fakeEngine struct {
 	colds           []string
 	coldStorage     []string
 	starts          []string
+	resizes         []string
 	stops           []string
 	removes         []string
 	probeTimeouts   []time.Duration
@@ -1728,6 +1729,13 @@ func (f *fakeEngine) Start(_ context.Context, name string) error {
 		return fmt.Errorf("vm %s not found", name)
 	}
 	f.stopped[name], f.paused[name] = false, false
+	return nil
+}
+
+func (f *fakeEngine) Resize(_ context.Context, name string, spec types.SizeSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resizes = append(f.resizes, fmt.Sprintf("%s %d/%s", name, spec.CPU, spec.Memory))
 	return nil
 }
 

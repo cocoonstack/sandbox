@@ -44,6 +44,7 @@ var (
 		"POST /v1/sandboxes/{id}/wake":        true,
 		"POST /v1/sandboxes/{id}/renew":       true,
 		"POST /v1/sandboxes/{id}/balloon":     true,
+		"POST /v1/sandboxes/{id}/resize":      true,
 		"GET /v1/sandboxes/{id}/env":          true,
 		"PUT /v1/sandboxes/{id}/env":          true,
 		"PATCH /v1/sandboxes/{id}/env":        true,

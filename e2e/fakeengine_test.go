@@ -78,6 +78,10 @@ func (f *fakeEngine) Start(_ context.Context, name string) error {
 	return fmt.Errorf("fakeEngine cannot cold-boot %s", name)
 }
 
+func (f *fakeEngine) Resize(_ context.Context, name string, _ types.SizeSpec) error {
+	return fmt.Errorf("fakeEngine cannot resize %s", name)
+}
+
 func (f *fakeEngine) Stop(ctx context.Context, name string) error {
 	return f.Remove(ctx, name)
 }

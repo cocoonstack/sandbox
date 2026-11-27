@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"crypto/subtle"
+	"fmt"
 
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -45,6 +46,54 @@ func (m *Manager) Wake(ctx context.Context, id string, cred Cred) error {
 	sb.Touch()
 	_, err := m.wakeResolved(ctx, sb)
 	return err
+}
+
+// Resize cold-boots a hibernated claim from its own disk at size; guest memory is lost.
+func (m *Manager) Resize(ctx context.Context, id string, size types.Size) error {
+	spec, ok := size.Spec()
+	if !ok {
+		return fmt.Errorf("%w: unknown size %q", ErrBadKey, size)
+	}
+	sb, ok := m.byID(id)
+	if !ok {
+		return ErrUnknownSandbox
+	}
+	if _, err := m.fenceWatch(sb); err != nil {
+		return err
+	}
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	m.mu.Lock()
+	live, volumes := m.claimed[sb.ID] == sb, m.hasVolumeHolds(sb)
+	m.mu.Unlock()
+	switch {
+	case !live:
+		return ErrUnknownSandbox
+	case sb.ArchiveCk != "" || sb.Failed != "" || sb.HibernateSnap == "":
+		return fmt.Errorf("%w: it is not hibernated", ErrNotResizable)
+	}
+	_, found, err := m.eng.Inspect(ctx, sb.VMName)
+	if err != nil {
+		return fmt.Errorf("resize %s: %w", sb.ID, err)
+	}
+	if reason := coldBootBlocker(sb, found, volumes); reason != "" {
+		return fmt.Errorf("%w: %s", ErrNotResizable, reason)
+	}
+	if err = m.beginWake(sb, false); err != nil {
+		return fmt.Errorf("resize %s: %w", sb.ID, err)
+	}
+	defer m.endWake(sb)
+	if err = m.eng.Resize(ctx, sb.VMName, spec); err != nil {
+		return fmt.Errorf("resize %s: %w", sb.ID, err)
+	}
+	live, err = m.commitIfLive(ctx, sb, func() { sb.Key.Size = size })
+	switch {
+	case !live:
+		return ErrUnknownSandbox
+	case err != nil:
+		return fmt.Errorf("resize %s: %w", sb.ID, err)
+	}
+	return m.restartLocked(ctx, sb)
 }
 
 // SetInstanceMetadata replaces a running sandbox's instance-metadata document; a paused or archived one is refused, not woken.
