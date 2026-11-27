@@ -418,9 +418,11 @@ class Sandbox:
             unreachable = exc if exc.status == 0 else None
         try:
             moved = self._client.lookup(self.id, self.token)
-        except APIError:
+        except APIError as exc:
             if unreachable is not None:
                 raise unreachable from None
+            if exc.status >= 500:
+                raise
             return
         try:
             self._release_at(moved.owner)
@@ -473,7 +475,9 @@ class Sandbox:
             return True
         try:
             moved = self._client.lookup(self.id, self.token)
-        except APIError:
+        except APIError as lookup_exc:
+            if lookup_exc.status >= 500:
+                raise
             return False
         if moved.owner == self.owner:
             return False
