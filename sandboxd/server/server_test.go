@@ -2993,6 +2993,8 @@ func (f *fakeManager) SetEgressLimit(_ context.Context, id string, l types.Egres
 	return f.setEgressLimit(id, l)
 }
 
+func (f *fakeManager) Resize(context.Context, string, types.Size) error { return nil }
+
 func (f *fakeManager) SetBalloon(_ context.Context, id, target string) (types.VMBalloon, error) {
 	if f.setBalloon == nil {
 		return types.VMBalloon{}, nil

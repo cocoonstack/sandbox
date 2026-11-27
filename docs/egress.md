@@ -292,9 +292,13 @@ takes no policy at all, whatever its pool's: no door is bound, so the guest's
 dial is refused. Which layers a claim has is settled when it
 is made and kept for its life: a `PUT /v1/pools` that adds or drops a pool
 without a config-file policy changes the claims made after it, never a live one.
-A reload is the one exception: a config-file policy it adds for the key of a
+There are two exceptions. A reload: a config-file policy it adds for the key of a
 live tenant claim made without a pool layer applies to that claim, and
-removing it again restores the class alone. Secrets are registered separately and
+removing it again restores the class alone. A
+[resize](sandboxd-api.md#post-v1sandboxesidresize): a claim made
+without a pool layer that it moves into a pool is that pool's claim from then
+on, with its policy or, when the pool has none, no egress; a clone of a
+promoted template keeps the layer of the pool its template came from. Secrets are registered separately and
 referenced by name — the value comes from the environment, never the config
 file: a claim's own `guest: false` env first, the node's second
 ([below](#claim-env-and-secrets)).

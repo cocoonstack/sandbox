@@ -139,6 +139,11 @@ type BalloonRequest struct {
 	Target string `json:"target"`
 }
 
+// ResizeRequest is the wire body of POST /v1/sandboxes/{id}/resize.
+type ResizeRequest struct {
+	Size types.Size `json:"size"`
+}
+
 // PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview.
 type PreviewRequest struct {
 	Token string `json:"token"`

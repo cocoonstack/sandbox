@@ -42,6 +42,8 @@ const (
 	liveVolumeFloor = "v0.7.2"
 	// migrateFloor adds live migration: capture rounds, receive and abort.
 	migrateFloor = "v0.7.7"
+	// resizeFloor adds vm resize for a stopped VM's vCPUs, memory and disk.
+	resizeFloor = "v0.8.1"
 
 	argName        = "--name"
 	argOutput      = "--output"

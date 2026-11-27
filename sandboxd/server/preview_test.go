@@ -93,6 +93,7 @@ func TestPreviewAnswersTheStatusOfAFailedDial(t *testing.T) {
 		{"released sandbox", pool.ErrUnknownSandbox, http.StatusNotFound, false},
 		{pool.ErrLeaseLost.Error(), pool.ErrLeaseLost, http.StatusServiceUnavailable, true},
 		{pool.ErrEvacuating.Error(), pool.ErrEvacuating, http.StatusServiceUnavailable, true},
+		{pool.ErrReplaced.Error(), pool.ErrReplaced, http.StatusServiceUnavailable, true},
 		{"quota", fmt.Errorf("wake sb_1: %w", pool.ErrQuota), http.StatusTooManyRequests, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

@@ -433,12 +433,12 @@ func (m *Manager) lockServing(sb *types.Sandbox) error {
 	}
 	sb.Transition.Lock()
 	m.mu.Lock()
-	live, paused := m.claimed[sb.ID] == sb, m.pausedForMoveLocked(sb)
+	heldErr, paused := m.heldErrLocked(sb), m.pausedForMoveLocked(sb)
 	m.mu.Unlock()
 	switch {
-	case !live:
+	case heldErr != nil:
 		sb.Transition.Unlock()
-		return ErrUnknownSandbox
+		return heldErr
 	case paused:
 		sb.Transition.Unlock()
 		return ErrEvacuating
@@ -446,17 +446,32 @@ func (m *Manager) lockServing(sb *types.Sandbox) error {
 	return nil
 }
 
-func (m *Manager) lockTransition(sb *types.Sandbox) error {
-	midMove := func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.midMoveLocked(sb)
+func (m *Manager) heldErrLocked(sb *types.Sandbox) error {
+	switch cur := m.claimed[sb.ID]; {
+	case cur == nil:
+		return ErrUnknownSandbox
+	case cur != sb:
+		return ErrReplaced
 	}
-	if midMove() {
+	return nil
+}
+
+func (m *Manager) lockTransition(sb *types.Sandbox) error {
+	m.mu.Lock()
+	moving := m.midMoveLocked(sb)
+	m.mu.Unlock()
+	if moving {
 		return ErrEvacuating
 	}
 	sb.Transition.Lock()
-	if midMove() {
+	m.mu.Lock()
+	cur, moving := m.claimed[sb.ID], m.midMoveLocked(sb)
+	m.mu.Unlock()
+	switch {
+	case cur != nil && cur != sb:
+		sb.Transition.Unlock()
+		return ErrReplaced
+	case moving:
 		sb.Transition.Unlock()
 		return ErrEvacuating
 	}

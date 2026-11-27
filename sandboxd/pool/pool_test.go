@@ -1503,21 +1503,26 @@ type fakeEngine struct {
 	tap        string
 	vsockLateN int
 
-	clones          []string
-	cloneFroms      []string
-	colds           []string
-	coldStorage     []string
-	starts          []string
-	stops           []string
-	removes         []string
-	probeTimeouts   []time.Duration
-	syncs           []string
-	laneMarks       []string
-	caInstalls      []string
-	trims           []string
-	staleReconciles []string
-	listCount       int
-	inspects        int
+	clones           []string
+	cloneFroms       []string
+	colds            []string
+	coldStorage      []string
+	starts           []string
+	resizes          []string
+	resizeErr        error
+	resizeHook       func()
+	resizeSupportErr error
+	vmStorage        map[string]int64
+	stops            []string
+	removes          []string
+	probeTimeouts    []time.Duration
+	syncs            []string
+	laneMarks        []string
+	caInstalls       []string
+	trims            []string
+	staleReconciles  []string
+	listCount        int
+	inspects         int
 
 	hibernates    []string
 	restores      []string
@@ -1729,6 +1734,18 @@ func (f *fakeEngine) Start(_ context.Context, name string) error {
 	}
 	f.stopped[name], f.paused[name] = false, false
 	return nil
+}
+
+func (f *fakeEngine) CheckResizeSupport(context.Context) error { return f.resizeSupportErr }
+
+func (f *fakeEngine) Resize(_ context.Context, name string, spec types.SizeSpec, storage string) error {
+	if f.resizeHook != nil {
+		f.resizeHook()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resizes = append(f.resizes, strings.TrimSpace(fmt.Sprintf("%s %d/%s %s", name, spec.CPU, spec.Memory, storage)))
+	return f.resizeErr
 }
 
 func (f *fakeEngine) Stop(_ context.Context, name string) error {
@@ -2344,7 +2361,7 @@ func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {
 		case f.stopped[name]:
 			state = "stopped"
 		}
-		rec := types.VMRecord{State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}
+		rec := types.VMRecord{State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name, Storage: f.vmStorage[name]}}
 		if f.tap != "" {
 			rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
 		}
@@ -2659,7 +2676,7 @@ func seedClaims(t *testing.T, dataDir string, claims map[string]*types.Sandbox) 
 
 func journaled(t *testing.T, m *Manager) map[string]*types.Sandbox {
 	t.Helper()
-	claims, err := newClaimStore(m.dataDir, false).load()
+	claims, err := newClaimStore(filepath.Dir(m.store.path), false).load()
 	if err != nil {
 		t.Fatalf("load journal: %v", err)
 	}

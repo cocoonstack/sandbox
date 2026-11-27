@@ -12,7 +12,7 @@ All bodies are JSON. Four token kinds:
   It acts with root's authority, with no tenant scoping, on exactly
   `POST /v1/claim`, `GET /v1/sandboxes`, `GET /v1/sandboxes/{id}`,
   `GET /v1/sandboxes/{id}/stats`, `GET /v1/stats`,
-  `POST /v1/sandboxes/{id}/release|hibernate|wake|renew|balloon`,
+  `POST /v1/sandboxes/{id}/release|hibernate|wake|renew|balloon|resize`,
   `GET/PUT/PATCH /v1/sandboxes/{id}/env`, `GET /v1/sandboxes/{id}/ports/{port}`,
   `POST /v1/sandboxes/{id}/exec`, `GET /v1/sandboxes/{id}/owner`, the
   [tenant API](#tenants-v1tenants), `GET /v1/info` and `GET /v1/peers`. Every
@@ -31,7 +31,7 @@ All bodies are JSON. Four token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Root surfaces
-  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `POST /v1/sandboxes/{id}/balloon`, `GET /v1/info`, `GET /v1/stats`,
+  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `POST /v1/sandboxes/{id}/balloon`, `POST /v1/sandboxes/{id}/resize`, `GET /v1/info`, `GET /v1/stats`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
   `POST /v1/sandboxes/{id}/move` and the peer `/v1/moves/{id}` calls, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
@@ -1302,7 +1302,7 @@ its flows and stops its ARP answers, then sends the guest `tun_down`, except
 while a checkpoint, fork or replica capture holds the claim, when the guest
 keeps a `tun0` that carries nothing; enabling, or changing the profile, re-arms the packet door and sends `tun_up`.
 Enabling a claim of a `tun` pool that holds no overlay address, because the
-address store failed at its claim, allocates one. A fork child takes its
+address store failed at its claim or a resize moved it into the pool, allocates one. A fork child takes its
 parent's switch and label, with its own address.
 
 204 on success; 400 an unknown field or a `profile` that does not match the
@@ -1346,6 +1346,68 @@ waking claim or one a hibernate is capturing; 503
 `sandbox moving to another node; retry` during a live move; 500 the cocoon
 call failed or outran its 30 s budget, or cocoon found the guest paused (a
 capture or a move round that began after the node's checks).
+
+## POST /v1/sandboxes/{id}/resize
+
+Auth: root or operator; a tenant token answers 403. Moves a hibernated claim
+to another size and cold-boots it from its own disk:
+
+```json
+{"size": "xlarge"}
+```
+
+→ `204`
+
+The claim keeps its id, token, disk, env and lease, and takes the pool key of
+its template and lane at `size`. The node must have that pool. From then on
+the claim is a claim of that pool: its egress policy, archive and idle
+settings, reader and replication apply, and `GET /v1/sandboxes/{id}` reports
+the new `key` and `cpu_count`. A clone of a promoted template keeps the
+egress policy, tun and replication settings of the pool its template was
+promoted from, and a claim made with
+`"egress": false` keeps no egress. The claim's tun state does not change: one with an overlay address keeps it, and one without that
+enters a `tun` pool holds none until
+[`PUT /v1/sandboxes/{id}/tun`](#put-v1sandboxesidtun) enables it. The guest keeps its disk, so nothing a pool
+does when it builds a VM (the image, the warmup, the cell CA an intercepting
+pool bakes) is applied again. A resize
+to the claim's own size is accepted: it grows the disk to the pool's
+`storage` and cold-boots the claim.
+
+sandboxd sets the VM's vCPUs and memory through `cocoon vm resize`, which
+needs cocoon v0.8.1 or newer. When the target pool's `storage` is above the
+disk's size, the same call grows the disk to it, and cocoon grows the
+filesystem of an OCI image's disk with it; a disk never shrinks. Then the
+claim takes the new key, its hibernate snapshot is dropped, and its VM
+cold-boots: guest memory is lost, `restarts` moves, the guest env is written
+again, and the instance-metadata document is the caller's to send again. A
+claim past its lease that archives at expiry in the pool it leaves starts a
+fresh lease, as a [wake](#post-v1sandboxesidwake) gives. The usage journal records `resize` with
+the new shape when the claim takes the key, and `vmm_restart` when the boot
+starts.
+
+Only a hibernated claim resizes; hibernate a running one first, and wake an
+archived one and hibernate it again. Until the claim takes the new key, a
+failure changes nothing sandboxd holds: the claim stays hibernated at its old
+size, a wake restores the snapshot and its size, and the same resize can be
+sent again. Once it has taken the key, the old memory image can no longer
+run: a cold boot that fails answers 500, and the claim is then one whose VMM
+is down, restarted or failed by the rows of
+[dead VMMs](deploy.md#dead-vmms-and-host-restarts). A call that waited for
+the claim while it resized answers 503
+`sandbox changed while the call waited; retry`; send it again. With `archive_failover`, a replica taken before the resize holds
+the old size until the next one replaces it, and a failover in that window
+brings the claim back, archived, at its old size and key. Its `adopt` usage event
+carries that shape; wake it, hibernate it and send the resize again.
+
+204 on success; 400 an unknown `size` or an unknown field; 404 unknown id;
+409 `sandbox cannot resize` with the reason: the claim is not hibernated
+(running, archived or failed), the node has no pool of its template and lane
+at that size, its VM record is gone, it has volumes, or cocoon is below v0.8.1; 429 when `max_running` or `disk_reserve` refuses the boot;
+503 `sandbox moving to another node; retry` on a node that is evacuating or
+starts to while the VM resizes (the claim stays hibernated at its old size and moves), or
+`lease lost; retry` for a replicated claim whose node's lease is overdue at the start or when the claim would take the key; 500 cocoon refused or failed the resize or the claims
+journal could not be written (the claim stays hibernated at its old size), or
+the cold boot failed after the claim took the new key.
 
 ## PUT /v1/sandboxes/{id}/egress-limit
 
@@ -1414,15 +1476,15 @@ truth is the usage journal below.
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
-"claim|renew|hibernate|wake|fork|checkpoint|adopt|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed|move_in|move_out",
+"claim|renew|hibernate|wake|fork|checkpoint|adopt|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed|move_in|move_out|resize",
 "id": "sb_…"}` plus `vm` (the VM's name; absent on `renew`, `adopt`, `archive`,
 `unarchive`, `archive_delete`, `egress`, `egress_bytes`, and the `reap` or
-`release` of an archived claim), `key` (the pool key's stable hash, claim
-events), `template`, `net` and `size` (the claim's template, lane and size
-tier, claim events, so a consumer can price a sandbox by its shape without the
+`release` of an archived claim), `key` (the pool key's stable hash, `claim`,
+`resize` and `adopt` events), `template`, `net` and `size` (the claim's template, lane and size
+tier, `claim`, `resize` and `adopt` events, so a consumer can price a sandbox by its shape without the
 claim record, which is gone after release; `size` sets the CPU and memory,
 and `template` is a label, since promote lets the caller name it), `deadline` (the deadline in force after this event: `claim`,
-`renew`, `wake`, `unarchive` and `move_in` carry the lease, `archive` and `adopt` the retention
+`renew`, `wake`, `unarchive`, `move_in` and `resize` carry the lease, `archive` and `adopt` the retention
 end, or nothing for an archive kept forever, and `reap` the deadline it ended under), `tenant` (the owning tenant, on every event of a
 tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
 id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). `egress` events, one per egress decision, are written only with
@@ -1448,7 +1510,12 @@ An event ends the current span at its `t` and enters a state: `claim`, `wake`,
 `unarchive`, `vmm_restart` and `move_in` enter `running`, `hibernate` enters `hibernated`,
 `archive` enters `archived`, and `vmm_exit`, `archive_delete`, `release` and
 `reap` enter `ended`. Other events, `vmm_failed` and `move_out` included, change no state, and
-`reap`, `adopt` and `archive_delete` have the exceptions below.
+`reap`, `adopt` and `archive_delete` have the exceptions below. A
+[`resize`](#post-v1sandboxesidresize) changes no state either: from its `t` on, the sandbox has
+the shape in its `key`, `template`, `net` and `size`, and the `vmm_restart` that follows it
+enters `running` at that shape. An `adopt` carries the shape of the checkpoint the node took over,
+and the sandbox has that shape from its `t` on: a failover to a replica taken before a resize
+brings the old shape back.
 Billable compute, hibernated storage and archived storage seconds are the time
 in `running`, `hibernated` and `archived`, a cheaper store tier than a hibernated
 VM's RAM. `vmm_exit` is stamped when the node first finds the VMM gone, so an
