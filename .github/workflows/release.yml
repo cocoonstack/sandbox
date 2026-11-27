@@ -22,7 +22,7 @@ jobs:
           crate_ver=$(sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)
           [ "$crate_ver" = "${GITHUB_REF_NAME#v}" ] || { echo "tag ${GITHUB_REF_NAME#v} != silkd/Cargo.toml $crate_ver" >&2; exit 1; }
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@v7.1.0
         with:
           go-version-file: sandboxd/go.mod
           cache-dependency-path: "**/go.sum"
