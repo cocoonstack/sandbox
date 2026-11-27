@@ -331,11 +331,11 @@ func (m *Manager) restartFailed(ctx context.Context, sb *types.Sandbox) error {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	live, failed, volumes := m.claimed[sb.ID] == sb, sb.Failed != "", m.hasVolumeHolds(sb)
+	heldErr, failed, volumes := m.heldErrLocked(sb), sb.Failed != "", m.hasVolumeHolds(sb)
 	m.mu.Unlock()
 	switch {
-	case !live:
-		return ErrUnknownSandbox
+	case heldErr != nil:
+		return heldErr
 	case !failed:
 		return nil
 	}

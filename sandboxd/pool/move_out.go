@@ -433,18 +433,25 @@ func (m *Manager) lockServing(sb *types.Sandbox) error {
 	}
 	sb.Transition.Lock()
 	m.mu.Lock()
-	cur, paused := m.claimed[sb.ID], m.pausedForMoveLocked(sb)
+	heldErr, paused := m.heldErrLocked(sb), m.pausedForMoveLocked(sb)
 	m.mu.Unlock()
 	switch {
-	case cur == nil:
+	case heldErr != nil:
 		sb.Transition.Unlock()
-		return ErrUnknownSandbox
-	case cur != sb:
-		sb.Transition.Unlock()
-		return ErrReplaced
+		return heldErr
 	case paused:
 		sb.Transition.Unlock()
 		return ErrEvacuating
+	}
+	return nil
+}
+
+func (m *Manager) heldErrLocked(sb *types.Sandbox) error {
+	switch cur := m.claimed[sb.ID]; {
+	case cur == nil:
+		return ErrUnknownSandbox
+	case cur != sb:
+		return ErrReplaced
 	}
 	return nil
 }

@@ -227,9 +227,12 @@ func TestCallsThatMeetAResizeNeverRestoreTheOldMemoryImage(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	cred := Cred{Token: sb.Token}
-	results, waited := make(chan error, 3), make(chan error, 1)
+	results, waited, again := make(chan error, 3), make(chan error, 3), make(chan error, 1)
 	eng.resizeHook = func() {
 		go func() { waited <- m.lockTransition(sb) }()
+		go func() { waited <- m.restartFailed(t.Context(), sb) }()
+		go func() { waited <- m.rewriteArchiveRow(t.Context(), sb, false) }()
+		go func() { again <- m.Resize(t.Context(), sb.ID, types.SizeXLarge) }()
 		go func() { _, err := m.wakeResolved(t.Context(), sb); results <- err }()
 		go func() { _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, cred); results <- err }()
 		go func() { _, err := m.Renew(t.Context(), sb.ID, cred, time.Hour, ""); results <- err }()
@@ -245,8 +248,13 @@ func TestCallsThatMeetAResizeNeverRestoreTheOldMemoryImage(t *testing.T) {
 			t.Errorf("a call that met the resize = %v, want success or the retry a replaced record answers", err)
 		}
 	}
-	if err := <-waited; !errors.Is(err, ErrReplaced) {
-		t.Errorf("a control call that waited for the resize = %v, want the retry a replaced record answers", err)
+	for range cap(waited) {
+		if err := <-waited; !errors.Is(err, ErrReplaced) {
+			t.Errorf("a control call that waited for the resize = %v, want the retry a replaced record answers", err)
+		}
+	}
+	if err := <-again; !errors.Is(err, ErrReplaced) && !errors.Is(err, ErrNotResizable) {
+		t.Errorf("a second resize that met the first = %v, want a retry or a refusal of the running claim", err)
 	}
 	if got, _ := m.Sandbox(sb.ID); got.Key != xlargeKey || got.Hibernated || len(eng.restores) != 0 {
 		t.Errorf("summary %+v with restores %v, want the running xlarge claim and no restore", got, eng.restores)
@@ -283,6 +291,11 @@ func TestAFailoverBeforeTheNextReplicaBringsAResizedClaimBackAtItsOldShape(t *te
 	if err := a.Resize(t.Context(), sb.ID, types.SizeXLarge); err != nil {
 		t.Fatalf("resize: %v", err)
 	}
+	resized, _ := a.byID(sb.ID)
+	hibernateClaim(t, a, resized)
+	if _, err := a.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); err != nil {
+		t.Fatalf("renew, which rewrites the replica's row: %v", err)
+	}
 
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt the replica taken before the resize")
@@ -293,6 +306,26 @@ func TestAFailoverBeforeTheNextReplicaBringsAResizedClaimBackAtItsOldShape(t *te
 	if moved.Key != testKey || last.Event != "adopt" || last.KeyHash != testKey.Hash() || last.Template != testKey.Template || last.Net != string(testKey.Net) || last.Size != string(testKey.Size) {
 		t.Errorf("adopted key %+v with last event %+v, want the claim back at its old key and an adopt that carries that shape", moved.Key, last)
 	}
+}
+
+func TestAResizeOfAReplicatedClaimStopsAtTheSwapWhileTheNodeIsFenced(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	if err := a.SetPools(t.Context(), []config.PoolSpec{{PoolKey: xlargeKey}}); err != nil {
+		t.Fatalf("add the xlarge pool: %v", err)
+	}
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	hibernateClaim(t, a, sb)
+	eng := fakeOf(a)
+	eng.resizeHook = a.tripFence
+
+	if err := a.Resize(t.Context(), sb.ID, types.SizeXLarge); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("resize across a lost lease = %v, want ErrLeaseLost", err)
+	}
+
+	a.liftFence()
+	assertUnresized(t, a, eng, sb)
 }
 
 func TestAResizeThatCocoonRefusesChangesNothing(t *testing.T) {

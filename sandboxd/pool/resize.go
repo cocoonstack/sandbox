@@ -30,7 +30,9 @@ func (m *Manager) Resize(ctx context.Context, id string, size types.Size) error 
 	if err := m.eng.CheckResizeSupport(ctx); err != nil {
 		return fmt.Errorf("%w: %w", ErrNotResizable, err)
 	}
-	sb.Transition.Lock()
+	if err := m.lockTransition(sb); err != nil {
+		return err
+	}
 	defer sb.Transition.Unlock()
 	if err := m.settleCapture(ctx, sb); err != nil {
 		return fmt.Errorf("resize %s: %w", id, err)
@@ -97,6 +99,9 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 	case m.evacuatingLocked(sb.ID):
 		m.mu.Unlock()
 		return nil, "", ErrEvacuating
+	case sb.Replicated && m.isFenced():
+		m.mu.Unlock()
+		return nil, "", ErrLeaseLost
 	}
 	snap, readerSafe, deadline := sb.HibernateSnap, sb.ReaderSafe, sb.Deadline
 	sb.HibernateSnap, sb.ReaderSafe = "", false

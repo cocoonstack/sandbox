@@ -82,6 +82,11 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	if err = json.Unmarshal(rec.Claim, sb); err != nil {
 		return false, fmt.Errorf("adopt %s: decode claim: %w", id, err)
 	}
+	ckpt, err := m.loadCheckpoint(ctx, rec.Checkpoint)
+	if err != nil {
+		return false, fmt.Errorf("adopt %s: %w", id, err)
+	}
+	sb.Key = ckpt.Key
 	if err = m.confirmAdoptedTun(ctx, sb); err != nil {
 		return false, fmt.Errorf("adopt %s: confirm overlay address: %w", id, err)
 	}
@@ -191,11 +196,11 @@ func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, lock
 	}
 	for range 2 {
 		m.mu.Lock()
-		ck, replica, live, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb, m.rowFollows(sb)
+		ck, replica, heldErr, rowed := sb.ArchiveCk, sb.ReplicaCk, m.heldErrLocked(sb), m.rowFollows(sb)
 		m.mu.Unlock()
 		switch {
-		case !live:
-			return ErrUnknownSandbox
+		case heldErr != nil:
+			return heldErr
 		case !rowed:
 			return nil
 		}

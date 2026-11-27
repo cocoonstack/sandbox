@@ -1365,8 +1365,8 @@ settings, reader and replication apply, and `GET /v1/sandboxes/{id}` reports
 the new `key` and `cpu_count`. A clone of a promoted template keeps the
 egress policy, tun and replication settings of the pool its template was
 promoted from, and a claim made with
-`"egress": false` keeps no egress. The claim's tun state does not change: one that
-enters a `tun` pool holds no overlay address until
+`"egress": false` keeps no egress. The claim's tun state does not change: one with an overlay address keeps it, and one without that
+enters a `tun` pool holds none until
 [`PUT /v1/sandboxes/{id}/tun`](#put-v1sandboxesidtun) enables it. The guest keeps its disk, so nothing a pool
 does when it builds a VM (the image, the warmup, the cell CA an intercepting
 pool bakes) is applied again. A resize
@@ -1396,8 +1396,8 @@ is down, restarted or failed by the rows of
 the claim while it resized answers 503
 `sandbox changed while the call waited; retry`; send it again. With `archive_failover`, a replica taken before the resize holds
 the old size until the next one replaces it, and a failover in that window
-brings the claim back at its old size and key. Its `adopt` usage event
-carries that shape; send the resize again.
+brings the claim back, archived, at its old size and key. Its `adopt` usage event
+carries that shape; wake it, hibernate it and send the resize again.
 
 204 on success; 400 an unknown `size` or an unknown field; 404 unknown id;
 409 `sandbox cannot resize` with the reason: the claim is not hibernated
@@ -1405,7 +1405,7 @@ carries that shape; send the resize again.
 at that size, its VM record is gone, it has volumes, or cocoon is below v0.8.1; 429 when `max_running` or `disk_reserve` refuses the boot;
 503 `sandbox moving to another node; retry` on a node that is evacuating or
 starts to while the VM resizes (the claim stays hibernated at its old size and moves), or
-`lease lost; retry`; 500 cocoon refused or failed the resize or the claims
+`lease lost; retry` for a replicated claim whose node's lease is overdue at the start or when the claim would take the key; 500 cocoon refused or failed the resize or the claims
 journal could not be written (the claim stays hibernated at its old size), or
 the cold boot failed after the claim took the new key.
 
