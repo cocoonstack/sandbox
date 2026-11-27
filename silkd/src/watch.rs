@@ -1,6 +1,6 @@
 //! `fs.watch` streams filesystem events until the client disconnects; the feed has no detached state.
 
-use notify::{RecursiveMode, Watcher};
+use notify::{RecursiveMode, WatchPathConfig, Watcher};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::sync::mpsc;
 
@@ -8,6 +8,7 @@ use crate::proto::{self, ErrorKind, EventKind, Response};
 
 const OVERFLOW_MESSAGE: &str = "watch event queue overflow";
 const EVENT_QUEUE: usize = 256;
+const WATCH_TAG: u64 = 0;
 
 /// Events written per syscall; batching keeps the queue far from its cap.
 const EVENT_BATCH: usize = 64;
@@ -74,7 +75,10 @@ fn arm(
         RecursiveMode::NonRecursive
     };
     watcher
-        .watch(std::path::Path::new(path), mode)
+        .watch_with(
+            std::path::Path::new(path),
+            WatchPathConfig::new(mode).with_user_data(WATCH_TAG),
+        )
         .map_err(|e| (map_kind(&e), e.to_string()))?;
     Ok(watcher)
 }
@@ -98,7 +102,11 @@ fn to_frames(res: notify::Result<notify::Event>, out: &mut Vec<Response>) {
     let event = match res {
         Ok(event) => event,
         Err(e) => {
-            out.push(Response::error(ErrorKind::Internal, e.to_string()));
+            if e.user_data() != Some(WATCH_TAG)
+                || matches!(e.kind, notify::ErrorKind::MaxFilesWatch)
+            {
+                out.push(Response::error(ErrorKind::Internal, e.to_string()));
+            }
             return;
         }
     };
@@ -144,6 +152,30 @@ mod tests {
             Response::Error { message, .. } => assert!(message.contains("inotify overflow")),
             other => panic!("expected error frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn directory_errors_emit_no_frame() {
+        let errors = [
+            notify::Error::generic("symbolic link loop").add_path("/x/loop".into()),
+            notify::Error::io(std::io::ErrorKind::NotADirectory.into()),
+        ];
+        let mut frames = Vec::new();
+        for err in errors {
+            to_frames(Err(err.set_user_data(WATCH_TAG)), &mut frames);
+        }
+        assert!(frames.is_empty(), "got {frames:?}");
+    }
+
+    #[test]
+    fn watch_limit_becomes_terminal_error_frame() {
+        let err = notify::Error::new(notify::ErrorKind::MaxFilesWatch).set_user_data(WATCH_TAG);
+        let mut frames = Vec::new();
+        to_frames(Err(err), &mut frames);
+        assert!(
+            matches!(frames.as_slice(), [Response::Error { .. }]),
+            "got {frames:?}"
+        );
     }
 
     #[test]
