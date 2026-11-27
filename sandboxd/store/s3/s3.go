@@ -28,6 +28,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 
@@ -46,6 +47,8 @@ const (
 	defaultFetchConcurrency    = 8
 	defaultPublishConcurrency  = 4
 	defaultMetaReadConcurrency = 8
+	defaultFetchAttempts       = 3
+	defaultFetchRetryBackoffMs = 200
 	transferBudget             = 30 * time.Minute
 	maxManifestFiles           = 1 << 12
 )
@@ -93,6 +96,9 @@ type Store struct {
 	fetchLimit    int
 	publishLimit  int
 	metaReadLimit int
+
+	fetchAttempts int
+	fetchBackoff  time.Duration
 }
 
 // New builds the backend; ctx bounds the credential-chain resolution, and only a labeled store reads labels in Metas.
@@ -114,6 +120,8 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 		fetchLimit:    cmp.Or(cfg.FetchConcurrency, defaultFetchConcurrency),
 		publishLimit:  cmp.Or(cfg.PublishConcurrency, defaultPublishConcurrency),
 		metaReadLimit: cmp.Or(cfg.MetaReadConcurrency, defaultMetaReadConcurrency),
+		fetchAttempts: cmp.Or(cfg.FetchAttempts, defaultFetchAttempts),
+		fetchBackoff:  time.Duration(cmp.Or(cfg.FetchRetryBackoffMs, defaultFetchRetryBackoffMs)) * time.Millisecond,
 	}
 	idle := max(awshttp.DefaultHTTPTransportMaxIdleConnsPerHost, st.uploadLimit, st.fetchLimit, st.metaReadLimit)
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
@@ -509,18 +517,34 @@ func (s *Store) materialize(ctx context.Context, man manifest, root string) (err
 }
 
 func (s *Store) fetchChunk(ctx context.Context, key string, f *os.File, size int64, chunk manifestChunk) error {
+	for attempt := 1; ; attempt++ {
+		cut, err := s.fetchChunkOnce(ctx, key, f, size, chunk)
+		if !cut || attempt >= s.fetchAttempts || ctx.Err() != nil {
+			return err
+		}
+		log.WithFunc("s3.Store.fetchChunk").Warnf(ctx, "attempt %d of %d failed: %v", attempt, s.fetchAttempts, err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt) * s.fetchBackoff):
+		}
+	}
+}
+
+func (s *Store) fetchChunkOnce(ctx context.Context, key string, f *os.File, size int64, chunk manifestChunk) (cut bool, err error) {
 	out, err := s.get(ctx, key)
 	if errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("chunk %s is missing", key) // not ErrNotFound: the record exists but is damaged
+		return false, fmt.Errorf("chunk %s is missing", key) // not ErrNotFound: the record exists but is damaged
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = out.Body.Close() }()
-	if err := store.WriteChunk(f, size, chunk.Index, chunk.SHA256, out.Body); err != nil {
-		return fmt.Errorf("chunk %s: %w", key, err)
+	body := &bodyReader{Reader: out.Body}
+	if err := store.WriteChunk(f, size, chunk.Index, chunk.SHA256, body); err != nil {
+		return body.err != nil, fmt.Errorf("chunk %s: %w", key, err)
 	}
-	return nil
+	return false, nil
 }
 
 func (s *Store) key(id, file string) string {
@@ -719,6 +743,19 @@ func (u *chunkUploader) claim(sha string) bool {
 	}
 	u.have[sha] = struct{}{}
 	return true
+}
+
+type bodyReader struct {
+	io.Reader
+	err error
+}
+
+func (b *bodyReader) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		b.err = err
+	}
+	return n, err
 }
 
 func publishFiles(staging string) ([]publishFile, error) {

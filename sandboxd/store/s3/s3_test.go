@@ -510,6 +510,51 @@ func TestFetchFailsOnDamagedChunks(t *testing.T) {
 			if errors.Is(err, store.ErrNotFound) {
 				t.Errorf("a damaged record must not read as absent: %v", err)
 			}
+			if got := fake.requestCount(http.MethodGet, chunkKey); got != 1 {
+				t.Errorf("chunk GETs = %d, want 1: damage is not retried", got)
+			}
+		})
+	}
+}
+
+func TestFetchRetriesAChunkWhoseBodyIsCut(t *testing.T) {
+	const id = "ck_00000000000000a4"
+	meta := metaJSON(id)
+	sum := sha256.Sum256([]byte("payload"))
+	chunkKey := "ck/chunks/" + id + "/" + hex.EncodeToString(sum[:])
+	for _, tt := range []struct {
+		name     string
+		attempts int
+		cuts     int
+		wantGets int
+		wantErr  bool
+	}{
+		{"one cut", 0, 1, 2, false},
+		{"default attempts spent", 0, 3, 3, true},
+		{"configured attempts", 5, 4, 5, false},
+		{"retry off", 1, 1, 1, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeS3{objects: map[string][]byte{}}
+			st := newTestStoreAt(t, fake, store.S3Config{FetchAttempts: tt.attempts, FetchRetryBackoffMs: 1})
+			publishRecord(t, st, id, meta, "payload")
+			fake.setGetCuts(chunkKey, tt.cuts)
+			dir, _, _, err := st.Fetch(t.Context(), id)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Fetch = %v, want error %v", err, tt.wantErr)
+			}
+			if got := fake.requestCount(http.MethodGet, chunkKey); got != tt.wantGets {
+				t.Errorf("chunk GETs = %d, want %d", got, tt.wantGets)
+			}
+			if tt.wantErr {
+				if !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Errorf("Fetch = %v, want the cut body's unexpected EOF", err)
+				}
+				return
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, "disk.img")); err != nil || string(got) != "payload" {
+				t.Errorf("fetched content = %q, %v, want the published payload", got, err)
+			}
 		})
 	}
 }
@@ -1028,6 +1073,7 @@ type fakeS3 struct {
 	objects       map[string][]byte
 	metadata      map[string]map[string]string
 	failPuts      map[string]int
+	cutGets       map[string]int
 	requests      map[fakeRequest]int
 	putLengths    map[string][]int64
 	modified      map[string]time.Time
@@ -1076,6 +1122,15 @@ func (f *fakeS3) setPutFailures(key string, count int) {
 		f.failPuts = map[string]int{}
 	}
 	f.failPuts[key] = count
+}
+
+func (f *fakeS3) setGetCuts(key string, count int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cutGets == nil {
+		f.cutGets = map[string]int{}
+	}
+	f.cutGets[key] = count
 }
 
 func (f *fakeS3) requestCount(method, key string) int {
@@ -1238,6 +1293,10 @@ func (f *fakeS3) handleGetObject(w http.ResponseWriter, key string) {
 	}
 	writeMetadata(w.Header(), f.metadata[key])
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if f.cutGets[key] > 0 {
+		f.cutGets[key]--
+		body = body[:len(body)/2]
+	}
 	_, _ = w.Write(body)
 }
 

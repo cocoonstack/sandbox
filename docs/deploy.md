@@ -427,6 +427,23 @@ of `upload_concurrency`, `fetch_concurrency` and `meta_read_concurrency` (at
 least 10) idle connections to the store, so a raised limit reuses its
 connections across transfers instead of opening new ones.
 
+### S3 fetch retries
+
+A chunk download whose body stops mid-read (`unexpected EOF`, a reset
+connection) is requested again; the AWS SDK retries a failed request itself
+and never a body it already returned. Two optional `checkpoint_store.s3`
+fields set the bound. Zero or absent keeps the default; a negative value is a
+config error.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `fetch_attempts` | 3 | requests per chunk, the first included; 1 turns the retry off |
+| `fetch_retry_backoff_ms` | 200 | wait before retry *n* is *n* times this |
+
+Each retry logs a warning with the chunk key and the read error. A missing
+chunk, a checksum or length mismatch and a local write error fail the fetch
+on the first attempt.
+
 ### Reclaiming S3 storage
 
 sandboxd never garbage-collects the S3 `checkpoint_store`. It only adds

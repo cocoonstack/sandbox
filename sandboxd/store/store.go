@@ -61,6 +61,9 @@ type S3Config struct {
 	FetchConcurrency    int `json:"fetch_concurrency,omitzero"`
 	PublishConcurrency  int `json:"publish_concurrency,omitzero"`
 	MetaReadConcurrency int `json:"meta_read_concurrency,omitzero"`
+
+	FetchAttempts       int `json:"fetch_attempts,omitzero"`
+	FetchRetryBackoffMs int `json:"fetch_retry_backoff_ms,omitzero"`
 }
 
 // CommitFunc makes a prepared generation the record's current one.
