@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -132,10 +133,15 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 
 // Lookup finds the sandbox owner using its id and token.
 func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error) {
+	var down atomic.Pointer[APIError]
 	probe := func(ctx context.Context, addr string) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, peersTimeout)
 		defer cancel()
-		return c.ownerAt(ctx, addr, id, token)
+		owner, err := c.ownerAt(ctx, addr, id, token)
+		if he, ok := errors.AsType[*APIError](err); ok && he.Status >= http.StatusInternalServerError {
+			down.CompareAndSwap(nil, he)
+		}
+		return owner, err
 	}
 	if owner, err := probe(ctx, c.addr); err == nil {
 		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
@@ -143,6 +149,9 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 	addrs, peersErr := c.peersOrErr(ctx)
 	owner, ok := scatter(ctx, addrs, probe)
 	if !ok {
+		if he := down.Load(); he != nil {
+			return nil, fmt.Errorf("lookup %s: %w", id, he)
+		}
 		return nil, errors.Join(fmt.Errorf("lookup %s: no owner found", id), peersErr)
 	}
 	return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil

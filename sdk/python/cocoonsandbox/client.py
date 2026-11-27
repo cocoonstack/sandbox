@@ -96,7 +96,9 @@ class Client(_Closeable):
         peers, peers_err = self._peers()
         try:
             return _scatter([self.addr, *peers], probe)
-        except APIError:
+        except APIError as exc:
+            if exc.status >= 500:
+                raise
             reason = f"no owner found for {id}" if peers_err is None else f"no owner found for {id}; {peers_err}"
             raise APIError("lookup", 404, reason) from None
 
@@ -353,10 +355,11 @@ def _scatter(addrs: Sequence[str], probe: Callable[[str], _T]) -> _T:
 
     for addr in addrs:
         threading.Thread(target=run, args=(addr,), daemon=True).start()
-    last_error = None
+    failure = None
     for _ in addrs:
         value, error = results.get()
         if error is None:
             return cast(_T, value)
-        last_error = error
-    raise cast(Exception, last_error)
+        if not (isinstance(failure, APIError) and failure.status >= 500):
+            failure = error
+    raise cast(Exception, failure)
