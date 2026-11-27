@@ -285,8 +285,7 @@ it while it sleeps write it, so the claim path is unchanged.
   registry write whose reply was lost: a tombstone its archived claim still
   names is re-armed, a live row next to a claim that names another checkpoint
   is an archive that never committed and goes with its export, and a
-  tombstone no claim holds is purged checkpoint first. Retention is a lower
-  bound: a purge can run up to an hour late. An archive kept forever (no
+  tombstone no claim holds is purged checkpoint first. An archive kept forever (no
   `archive_delete_after_seconds`) stays until a client adopts and releases it.
   A checkpoint the claims journal may still name is never deleted: after a
   failed journal write its delete waits for the next write that lands, and a
