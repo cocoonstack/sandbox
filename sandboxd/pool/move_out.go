@@ -179,8 +179,8 @@ func (m *Manager) markMoving(sb *types.Sandbox, mv *outMove) error {
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.claimed[sb.ID] != sb {
-		return ErrUnknownSandbox
+	if err := m.heldErrLocked(sb); err != nil {
+		return err
 	}
 	if reason := m.moveBlocker(sb); reason != "" {
 		return fmt.Errorf("%w: %s", ErrNotMovable, reason)

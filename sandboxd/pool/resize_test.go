@@ -202,6 +202,57 @@ func TestAClaimMadeWithoutAPoolLayerTakesTheLayerOfThePoolAResizeMovesItInto(t *
 	}
 }
 
+func TestAResizeNeedsTheTargetPoolToInterceptEveryInjectHost(t *testing.T) {
+	allowOnly := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}
+	for _, tc := range []struct {
+		name   string
+		target *egress.Policy
+		reload bool
+		want   string
+	}{
+		{"the target pool only allows the host", allowOnly, false, "KEY: api.github.com is not intercepted"},
+		{"the target pool intercepts the host", interceptPolicy(), false, ""},
+		{"a reload took the intercept from both pools before the resize", interceptPolicy(), true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.sockRoot = outboundtest.SockRoot(t)
+			m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()}, config.PoolSpec{PoolKey: xlargeKey, Egress: tc.target})
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: injectEnv("k", "api.github.com")})
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			hibernateClaim(t, m, sb)
+			if tc.reload {
+				editEgress(t, m, func(cfg *config.Config) {
+					for i := range cfg.Pools {
+						cfg.Pools[i].Egress = allowOnly
+					}
+				})
+			}
+
+			err = m.Resize(t.Context(), sb.ID, types.SizeXLarge)
+
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("resize: %v, want it to add no gap and go through", err)
+				}
+				if next, _ := m.byID(sb.ID); next.Key != xlargeKey || credentialsFor(next, "api.github.com") != "KEY:X-Api-Key=k" {
+					t.Errorf("key %v with credentials %q, want the xlarge claim still injecting", next.Key, credentialsFor(next, "api.github.com"))
+				}
+				return
+			}
+			if !errors.Is(err, ErrNotResizable) || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("resize = %v, want ErrNotResizable naming %q", err, tc.want)
+			}
+			if len(eng.resizes) != 0 {
+				t.Errorf("engine resizes %v, want none", eng.resizes)
+			}
+			assertUnresized(t, m, eng, sb)
+		})
+	}
+}
+
 func TestAResizeRefusesAClaimThatHoldsVolumes(t *testing.T) {
 	eng := newFakeEngine()
 	m := newResizeManager(t, eng, "")
@@ -221,17 +272,41 @@ func TestAResizeRefusesAClaimThatHoldsVolumes(t *testing.T) {
 	}
 }
 
+func TestAResizeIsRefusedWhenThePoolLayerItTakesDropsAnInjectHost(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = outboundtest.SockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: xlargeKey})
+	editEgress(t, m, func(cfg *config.Config) {
+		cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: interceptPolicy()}}
+	})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", EgressClass: "desk", Env: injectEnv("k", "api.github.com")})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	hibernateClaim(t, m, sb)
+
+	err = m.Resize(t.Context(), sb.ID, types.SizeXLarge)
+
+	if !errors.Is(err, ErrNotResizable) || !strings.Contains(err.Error(), "KEY: api.github.com is not intercepted") {
+		t.Errorf("resize = %v, want ErrNotResizable: the policy-less pool's layer leaves the claim no egress", err)
+	}
+	if len(eng.resizes) != 0 {
+		t.Errorf("engine resizes %v, want none", eng.resizes)
+	}
+}
+
 func TestCallsThatMeetAResizeNeverRestoreTheOldMemoryImage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newResizeManager(t, eng, "")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	cred := Cred{Token: sb.Token}
-	results, waited, again := make(chan error, 3), make(chan error, 3), make(chan error, 1)
+	results, waited, again := make(chan error, 3), make(chan error, 4), make(chan error, 1)
 	eng.resizeHook = func() {
 		go func() { waited <- m.lockTransition(sb) }()
 		go func() { waited <- m.restartFailed(t.Context(), sb) }()
 		go func() { waited <- m.rewriteArchiveRow(t.Context(), sb, false) }()
+		go func() { waited <- m.markMoving(sb, &outMove{}) }()
 		go func() { again <- m.Resize(t.Context(), sb.ID, types.SizeXLarge) }()
 		go func() { _, err := m.wakeResolved(t.Context(), sb); results <- err }()
 		go func() { _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, cred); results <- err }()
