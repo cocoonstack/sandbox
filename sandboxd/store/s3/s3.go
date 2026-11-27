@@ -28,6 +28,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 
@@ -46,14 +47,22 @@ const (
 	defaultFetchConcurrency    = 8
 	defaultPublishConcurrency  = 4
 	defaultMetaReadConcurrency = 8
+	defaultFetchAttempts       = 3
+	defaultFetchRetryBackoffMs = 200
+	defaultStallTimeoutMs      = 30_000
 	transferBudget             = 30 * time.Minute
+	callBudget                 = 5 * time.Minute
 	maxManifestFiles           = 1 << 12
 )
 
-var chunkBufs = sync.Pool{New: func() any {
-	buf := make([]byte, store.DigestChunkSize)
-	return &buf
-}}
+var (
+	errStalled = errors.New("response stalled")
+
+	chunkBufs = sync.Pool{New: func() any {
+		buf := make([]byte, store.DigestChunkSize)
+		return &buf
+	}}
+)
 
 type publishFile struct {
 	path string
@@ -77,6 +86,8 @@ type manifestChunk struct {
 	SHA256 string `json:"sha256"`
 }
 
+type bodyFunc func(*awss3.GetObjectOutput, io.Reader) error
+
 var _ store.Store = (*Store)(nil)
 
 // Store stages locally and publishes to the bucket; idRe names the instance's id namespace.
@@ -93,6 +104,11 @@ type Store struct {
 	fetchLimit    int
 	publishLimit  int
 	metaReadLimit int
+
+	fetchAttempts int
+	fetchBackoff  time.Duration
+	stallTimeout  time.Duration
+	callBudget    time.Duration
 }
 
 // New builds the backend; ctx bounds the credential-chain resolution, and only a labeled store reads labels in Metas.
@@ -114,11 +130,16 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 		fetchLimit:    cmp.Or(cfg.FetchConcurrency, defaultFetchConcurrency),
 		publishLimit:  cmp.Or(cfg.PublishConcurrency, defaultPublishConcurrency),
 		metaReadLimit: cmp.Or(cfg.MetaReadConcurrency, defaultMetaReadConcurrency),
+		fetchAttempts: cmp.Or(cfg.FetchAttempts, defaultFetchAttempts),
+		fetchBackoff:  time.Duration(cmp.Or(cfg.FetchRetryBackoffMs, defaultFetchRetryBackoffMs)) * time.Millisecond,
+		stallTimeout:  time.Duration(cmp.Or(cfg.StallTimeoutMs, defaultStallTimeoutMs)) * time.Millisecond,
+		callBudget:    callBudget,
 	}
 	idle := max(awshttp.DefaultHTTPTransportMaxIdleConnsPerHost, st.uploadLimit, st.fetchLimit, st.metaReadLimit)
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
 		t.MaxIdleConnsPerHost = idle
 		t.MaxIdleConns = max(t.MaxIdleConns, idle)
+		t.ResponseHeaderTimeout = st.stallTimeout
 	})
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region), awsconfig.WithHTTPClient(httpClient))
 	if err != nil {
@@ -129,6 +150,9 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 			o.BaseEndpoint = new(cfg.Endpoint)
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
+		if retryer, ok := o.Retryer.(aws.RetryerV2); ok {
+			o.Retryer = cutRetryer{retryer}
+		}
 		if cfg.UnsignedAcceptEncoding {
 			base := o.HTTPClient
 			o.HTTPClient = smithyhttp.ClientDoFunc(func(req *http.Request) (*http.Response, error) {
@@ -341,29 +365,53 @@ func (s *Store) readManifest(ctx context.Context, id, gen string) (manifest, err
 	return man, nil
 }
 
-func (s *Store) getObject(ctx context.Context, key string) ([]byte, *awss3.GetObjectOutput, error) {
-	out, err := s.get(ctx, key)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer func() { _ = out.Body.Close() }()
-	body, err := io.ReadAll(out.Body)
+func (s *Store) getObject(ctx context.Context, key string) (body []byte, out *awss3.GetObjectOutput, err error) {
+	err = s.readObject(ctx, key, func(o *awss3.GetObjectOutput, r io.Reader) (err error) {
+		out = o
+		body, err = io.ReadAll(r)
+		return err
+	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return body, out, nil
 }
 
-func (s *Store) get(ctx context.Context, key string) (*awss3.GetObjectOutput, error) {
+func (s *Store) readObject(ctx context.Context, key string, read bodyFunc) error {
+	for attempt := 1; ; attempt++ {
+		cut, err := s.readObjectOnce(ctx, key, read)
+		if !cut || attempt >= s.fetchAttempts || ctx.Err() != nil {
+			return err
+		}
+		log.WithFunc("s3.Store.readObject").Warnf(ctx, "attempt %d of %d failed: %v", attempt, s.fetchAttempts, err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt) * s.fetchBackoff):
+		}
+	}
+}
+
+func (s *Store) readObjectOnce(ctx context.Context, key string, read bodyFunc) (cut bool, err error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	idle := time.AfterFunc(s.callBudget, func() { cancel(errStalled) })
+	defer idle.Stop()
 	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &key})
 	if err != nil {
 		apiErr, ok := errors.AsType[smithy.APIError](err)
 		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
-			return nil, store.ErrNotFound
+			return false, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("object %s: %w", key, err)
+		return false, fmt.Errorf("object %s: %w", key, cmp.Or(context.Cause(ctx), err))
 	}
-	return out, nil
+	defer func() { _ = out.Body.Close() }()
+	idle.Reset(s.stallTimeout)
+	body := &bodyReader{Reader: out.Body, stall: s.stallTimeout, idle: idle}
+	if err := read(out, body); err != nil {
+		return body.err != nil, fmt.Errorf("object %s: %w", key, cmp.Or(context.Cause(ctx), err))
+	}
+	return false, nil
 }
 
 func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digested bool) (string, store.CommitFunc, error) {
@@ -509,18 +557,13 @@ func (s *Store) materialize(ctx context.Context, man manifest, root string) (err
 }
 
 func (s *Store) fetchChunk(ctx context.Context, key string, f *os.File, size int64, chunk manifestChunk) error {
-	out, err := s.get(ctx, key)
+	err := s.readObject(ctx, key, func(_ *awss3.GetObjectOutput, body io.Reader) error {
+		return store.WriteChunk(f, size, chunk.Index, chunk.SHA256, body)
+	})
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("chunk %s is missing", key) // not ErrNotFound: the record exists but is damaged
 	}
-	if err != nil {
-		return err
-	}
-	defer func() { _ = out.Body.Close() }()
-	if err := store.WriteChunk(f, size, chunk.Index, chunk.SHA256, out.Body); err != nil {
-		return fmt.Errorf("chunk %s: %w", key, err)
-	}
-	return nil
+	return err
 }
 
 func (s *Store) key(id, file string) string {
@@ -550,7 +593,7 @@ func (s *Store) recordIDs(ctx context.Context, prefix string) ([]string, error) 
 		Bucket: &s.bucket, Prefix: new(s.prefix + prefix), Delimiter: new("/"),
 	})
 	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
+		page, err := s.nextPage(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("list %s: %w", s.prefix+prefix, err)
 		}
@@ -637,6 +680,8 @@ func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata
 }
 
 func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
+	ctx, cancel := context.WithTimeout(ctx, s.callBudget)
+	defer cancel()
 	objs := make([]s3types.ObjectIdentifier, len(keys))
 	for i := range keys {
 		objs[i] = s3types.ObjectIdentifier{Key: &keys[i]}
@@ -658,11 +703,17 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 	return nil
 }
 
+func (s *Store) nextPage(ctx context.Context, p *awss3.ListObjectsV2Paginator) (*awss3.ListObjectsV2Output, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.callBudget)
+	defer cancel()
+	return p.NextPage(ctx)
+}
+
 func (s *Store) list(ctx context.Context, prefix string) ([]s3types.Object, error) {
 	var objs []s3types.Object
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix})
 	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
+		page, err := s.nextPage(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("list %s: %w", prefix, err)
 		}
@@ -719,6 +770,28 @@ func (u *chunkUploader) claim(sha string) bool {
 	}
 	u.have[sha] = struct{}{}
 	return true
+}
+
+type bodyReader struct {
+	io.Reader
+	idle  *time.Timer
+	stall time.Duration
+	err   error
+}
+
+func (b *bodyReader) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	b.idle.Reset(b.stall)
+	if err != nil && !errors.Is(err, io.EOF) {
+		b.err = err
+	}
+	return n, err
+}
+
+type cutRetryer struct{ aws.RetryerV2 }
+
+func (r cutRetryer) IsErrorRetryable(err error) bool {
+	return errors.Is(err, io.ErrUnexpectedEOF) || r.RetryerV2.IsErrorRetryable(err)
 }
 
 func publishFiles(staging string) ([]publishFile, error) {

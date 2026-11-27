@@ -163,6 +163,9 @@ func (s *StoreConfig) validate() error {
 		if min(s.S3.UploadConcurrency, s.S3.FetchConcurrency, s.S3.PublishConcurrency, s.S3.MetaReadConcurrency) < 0 {
 			return fmt.Errorf("checkpoint_store s3 concurrency must not be negative")
 		}
+		if min(s.S3.FetchAttempts, s.S3.FetchRetryBackoffMs, s.S3.StallTimeoutMs) < 0 {
+			return fmt.Errorf("checkpoint_store s3 fetch_attempts, fetch_retry_backoff_ms and stall_timeout_ms must not be negative")
+		}
 	default:
 		return fmt.Errorf("checkpoint_store kind %q: want dir or s3", s.Kind)
 	}

@@ -27,7 +27,18 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 )
 
-const _ = uint(store.GenerationGrace - transferBudget - 1)
+const (
+	_ = uint(store.GenerationGrace - transferBudget - 1)
+
+	stallHeaders = "headers"
+	stallBody    = "body"
+	stallError   = "error"
+	stallStart   = "start"
+	slowBody     = "slow"
+
+	listCall   = "?list"
+	deleteCall = "?delete"
+)
 
 func TestS3BackendContract(t *testing.T) {
 	_, st := newFakeStore(t)
@@ -510,7 +521,173 @@ func TestFetchFailsOnDamagedChunks(t *testing.T) {
 			if errors.Is(err, store.ErrNotFound) {
 				t.Errorf("a damaged record must not read as absent: %v", err)
 			}
+			if got := fake.requestCount(http.MethodGet, chunkKey); got != 1 {
+				t.Errorf("chunk GETs = %d, want 1: damage is not retried", got)
+			}
 		})
+	}
+}
+
+func TestFetchRetriesAChunkWhoseBodyIsCut(t *testing.T) {
+	const id = "ck_00000000000000a4"
+	meta := metaJSON(id)
+	sum := sha256.Sum256([]byte("payload"))
+	chunkKey := "ck/chunks/" + id + "/" + hex.EncodeToString(sum[:])
+	for _, tt := range []struct {
+		name     string
+		attempts int
+		cuts     int
+		wantGets int
+		wantErr  bool
+	}{
+		{"one cut", 0, 1, 2, false},
+		{"default attempts spent", 0, 3, 3, true},
+		{"configured attempts", 5, 4, 5, false},
+		{"retry off", 1, 1, 1, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeS3{objects: map[string][]byte{}}
+			st := newTestStoreAt(t, fake, store.S3Config{FetchAttempts: tt.attempts, FetchRetryBackoffMs: 1})
+			publishRecord(t, st, id, meta, "payload")
+			fake.setGetCuts(chunkKey, tt.cuts)
+			dir, _, _, err := st.Fetch(t.Context(), id)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Fetch = %v, want error %v", err, tt.wantErr)
+			}
+			if got := fake.requestCount(http.MethodGet, chunkKey); got != tt.wantGets {
+				t.Errorf("chunk GETs = %d, want %d", got, tt.wantGets)
+			}
+			if tt.wantErr {
+				if !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Errorf("Fetch = %v, want the cut body's unexpected EOF", err)
+				}
+				return
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, "disk.img")); err != nil || string(got) != "payload" {
+				t.Errorf("fetched content = %q, %v, want the published payload", got, err)
+			}
+		})
+	}
+}
+
+func TestFetchRetriesAMetaOrManifestReadWhoseBodyIsCut(t *testing.T) {
+	const id = "ck_00000000000000a5"
+	meta := metaJSON(id)
+	for _, tt := range []struct {
+		name string
+		key  string
+	}{
+		{"meta", "ck/" + id + "/" + store.MetaFile},
+		{"manifest", "ck/manifests/" + id + "/" + store.ExportGen(meta) + ".json"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeS3{objects: map[string][]byte{}}
+			st := newTestStoreAt(t, fake, store.S3Config{FetchRetryBackoffMs: 1})
+			publishRecord(t, st, id, meta, "payload")
+			fake.resetRequests()
+			fake.setGetCuts(tt.key, 1)
+			if _, _, _, err := st.Fetch(t.Context(), id); err != nil {
+				t.Fatalf("Fetch = %v, want the cut read retried", err)
+			}
+			if got := fake.requestCount(http.MethodGet, tt.key); got != 2 {
+				t.Errorf("GETs of %s = %d, want 2", tt.key, got)
+			}
+		})
+	}
+}
+
+func TestFetchRequestsAStalledChunkAgain(t *testing.T) {
+	const id = "ck_00000000000000a6"
+	meta := metaJSON(id)
+	sum := sha256.Sum256([]byte("payload"))
+	chunkKey := "ck/chunks/" + id + "/" + hex.EncodeToString(sum[:])
+	for _, stage := range []string{stallHeaders, stallStart, stallBody} {
+		t.Run(stage, func(t *testing.T) {
+			fake := &fakeS3{objects: map[string][]byte{}, release: make(chan struct{})}
+			st := newTestStoreAt(t, fake, store.S3Config{FetchRetryBackoffMs: 1, StallTimeoutMs: 200})
+			t.Cleanup(func() { close(fake.release) })
+			publishRecord(t, st, id, meta, "payload")
+			fake.setStall(chunkKey, stage)
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			dir, _, _, err := st.Fetch(ctx, id)
+			if err != nil {
+				t.Fatalf("Fetch = %v, want the stalled request made again", err)
+			}
+			if got := fake.requestCount(http.MethodGet, chunkKey); got != 2 {
+				t.Errorf("chunk GETs = %d, want 2", got)
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, "disk.img")); err != nil || string(got) != "payload" {
+				t.Errorf("fetched content = %q, %v, want the published payload", got, err)
+			}
+		})
+	}
+}
+
+func TestFetchKeepsABodyThatIsSlowButFlowing(t *testing.T) {
+	const id = "ck_00000000000000a8"
+	sum := sha256.Sum256([]byte("payload"))
+	chunkKey := "ck/chunks/" + id + "/" + hex.EncodeToString(sum[:])
+	fake := &fakeS3{objects: map[string][]byte{}, release: make(chan struct{})}
+	st := newTestStoreAt(t, fake, store.S3Config{StallTimeoutMs: 1000})
+	t.Cleanup(func() { close(fake.release) })
+	publishRecord(t, st, id, metaJSON(id), "payload")
+	fake.setStall(chunkKey, slowBody)
+	if _, _, _, err := st.Fetch(t.Context(), id); err != nil {
+		t.Fatalf("Fetch = %v, want a body that outlasts the stall timeout while its bytes keep coming", err)
+	}
+	if got := fake.requestCount(http.MethodGet, chunkKey); got != 1 {
+		t.Errorf("chunk GETs = %d, want 1", got)
+	}
+}
+
+func TestACallWhoseReplyStallsEndsAtItsBudget(t *testing.T) {
+	const id = "ck_00000000000000a9"
+	metas := func(ctx context.Context, st *Store) error {
+		_, err := st.Metas(ctx, "")
+		return err
+	}
+	for _, tt := range []struct {
+		name  string
+		call  string
+		stage string
+		want  error
+		run   func(context.Context, *Store) error
+	}{
+		{"listing body", listCall, stallBody, context.DeadlineExceeded, metas},
+		{"delete headers", deleteCall, stallHeaders, context.DeadlineExceeded, func(ctx context.Context, st *Store) error { return st.Delete(ctx, id) }},
+		{"download error body", "ck/" + id + "/" + store.MetaFile, stallError, errStalled, metas},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeS3{objects: map[string][]byte{}, release: make(chan struct{})}
+			st := newTestStore(t, fake)
+			t.Cleanup(func() { close(fake.release) })
+			st.callBudget = 300 * time.Millisecond
+			publishRecord(t, st, id, metaJSON(id), "payload")
+			fake.setStall(tt.call, tt.stage)
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			if err := tt.run(ctx, st); !errors.Is(err, tt.want) || ctx.Err() != nil {
+				t.Fatalf("stalled call = %v (caller ctx %v), want the call's own budget to end it", err, ctx.Err())
+			}
+			if err := tt.run(ctx, st); err != nil {
+				t.Errorf("the call after the stalled one = %v, want it to succeed", err)
+			}
+		})
+	}
+}
+
+func TestListRetriesAPageWhoseBodyIsCut(t *testing.T) {
+	const id = "ck_00000000000000a7"
+	fake, st := newFakeStore(t)
+	publishRecord(t, st, id, metaJSON(id), "payload")
+	fake.setListCuts(1)
+	recs, err := st.Metas(t.Context(), "")
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("Metas = %d records, %v, want the one record after a retried page", len(recs), err)
+	}
+	if left := fake.setListCuts(0); left != 0 {
+		t.Errorf("list cuts left = %d, want the cut page served", left)
 	}
 }
 
@@ -1028,6 +1205,10 @@ type fakeS3 struct {
 	objects       map[string][]byte
 	metadata      map[string]map[string]string
 	failPuts      map[string]int
+	cutGets       map[string]int
+	cutLists      int
+	stalls        map[string]string
+	release       chan struct{}
 	requests      map[fakeRequest]int
 	putLengths    map[string][]int64
 	modified      map[string]time.Time
@@ -1041,6 +1222,9 @@ type fakeS3 struct {
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/testbucket/")
+	if f.stall(w, r, stallKey(r, key)) {
+		return
+	}
 	if f.exportGate != nil && r.Method == http.MethodGet && strings.Contains(key, cmp.Or(f.gateOn, "/"+store.ExportDir)) {
 		select {
 		case f.exportEntered <- struct{}{}:
@@ -1076,6 +1260,74 @@ func (f *fakeS3) setPutFailures(key string, count int) {
 		f.failPuts = map[string]int{}
 	}
 	f.failPuts[key] = count
+}
+
+func (f *fakeS3) setGetCuts(key string, count int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cutGets == nil {
+		f.cutGets = map[string]int{}
+	}
+	f.cutGets[key] = count
+}
+
+func (f *fakeS3) setListCuts(count int) (left int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	left, f.cutLists = f.cutLists, count
+	return left
+}
+
+func (f *fakeS3) setStall(key, stage string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stalls == nil {
+		f.stalls = map[string]string{}
+	}
+	f.stalls[key] = stage
+}
+
+func (f *fakeS3) stall(w http.ResponseWriter, r *http.Request, key string) bool {
+	f.mu.Lock()
+	stage, body := f.stalls[key], f.objects[key]
+	if body == nil {
+		body = []byte("<Reply><Stalled/></Reply>")
+	}
+	if stage != "" {
+		delete(f.stalls, key)
+		f.requests[fakeRequest{method: r.Method, key: key}]++
+	}
+	f.mu.Unlock()
+	if stage == "" {
+		return false
+	}
+	switch stage {
+	case stallError:
+		body = []byte("<Error><Code>ServiceUnavailable</Code></Error>")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write(body[:len(body)/2])
+		w.(http.Flusher).Flush()
+	case stallStart:
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.(http.Flusher).Flush()
+	case stallBody:
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write(body[:len(body)/2])
+		w.(http.Flusher).Flush()
+	case slowBody:
+		for i := range body {
+			_, _ = w.Write(body[i : i+1])
+			w.(http.Flusher).Flush()
+			time.Sleep(1200 * time.Millisecond / time.Duration(len(body)))
+		}
+		return true
+	}
+	select {
+	case <-r.Context().Done():
+	case <-f.release:
+	}
+	return true
 }
 
 func (f *fakeS3) requestCount(method, key string) int {
@@ -1226,7 +1478,13 @@ func (f *fakeS3) handleListObjects(w http.ResponseWriter, r *http.Request) {
 	slices.SortFunc(result.Contents, func(a, b object) int { return cmp.Compare(a.Key, b.Key) })
 	slices.SortFunc(result.CommonPrefixes, func(a, b commonPrefix) int { return cmp.Compare(a.Prefix, b.Prefix) })
 	w.Header().Set("Content-Type", "application/xml")
-	_ = xml.NewEncoder(w).Encode(result)
+	page, _ := xml.Marshal(result)
+	w.Header().Set("Content-Length", strconv.Itoa(len(page)))
+	if f.cutLists > 0 {
+		f.cutLists--
+		page = page[:len(page)/2]
+	}
+	_, _ = w.Write(page)
 }
 
 func (f *fakeS3) handleGetObject(w http.ResponseWriter, key string) {
@@ -1238,6 +1496,10 @@ func (f *fakeS3) handleGetObject(w http.ResponseWriter, key string) {
 	}
 	writeMetadata(w.Header(), f.metadata[key])
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if f.cutGets[key] > 0 {
+		f.cutGets[key]--
+		body = body[:len(body)/2]
+	}
 	_, _ = w.Write(body)
 }
 
@@ -1399,6 +1661,16 @@ func newTestStoreAt(t *testing.T, endpoint http.Handler, cfg store.S3Config) *St
 		t.Fatalf("New: %v", err)
 	}
 	return st
+}
+
+func stallKey(r *http.Request, key string) string {
+	switch query := r.URL.Query(); {
+	case query.Get("list-type") == "2":
+		return listCall
+	case query.Has("delete"):
+		return deleteCall
+	}
+	return key
 }
 
 func assertSingleMetaGet(t *testing.T, fake *fakeS3, metaKey string) {
