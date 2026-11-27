@@ -612,6 +612,11 @@ zero. `undrain()` lifts only a drain and `uncordon()` only a
 `SandboxError` is the base; catch the narrowest type you handle:
 
 - `APIError(verb, status, message)` — control plane (HTTP status)
+  - a 503 whose message ends in `; retry` is a designed pause (the meta store
+    is down, the node's lease is lost, the sandbox is moving to another node; see the
+    [API](sandboxd-api.md)). The node sends `Retry-After: 10`. The SDK raises
+    the error and does not resend: only a claim moves on to its other redirect
+    targets. The same call can be sent again
 - `VolumeError` — an `APIError` from a volume call; `.response` holds the
   complete failure view when the node returned one
 - `SilkdError(kind, message)` — typed guest failure; `kind` is

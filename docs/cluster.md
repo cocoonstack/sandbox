@@ -275,12 +275,17 @@ it while it sleeps write it, so the claim path is unchanged.
   the owner settles it when it returns, through its sweep or its restart.
   The epoch compare-and-set lets exactly one node win each,
   and `archive_delete` is recorded only for a row that was still archived.
+  A row delete that lands while its reply is lost records none, so
+  `archive_delete` is written at most once: the retention end on the claim's
+  `archive` event is the upper bound of the time to bill. It is not when the
+  bytes go. The sweep runs hourly and deletes the record on a pass after the
+  deadline, a later pass when one fails, and on S3 the chunks and manifests
+  stay until [offline reclamation](deploy.md#reclaiming-s3-storage).
   Each node also settles its own rows against its claims, which converges a
   registry write whose reply was lost: a tombstone its archived claim still
   names is re-armed, a live row next to a claim that names another checkpoint
   is an archive that never committed and goes with its export, and a
-  tombstone no claim holds is purged checkpoint first. Retention is a lower
-  bound: a purge can run up to an hour late. An archive kept forever (no
+  tombstone no claim holds is purged checkpoint first. An archive kept forever (no
   `archive_delete_after_seconds`) stays until a client adopts and releases it.
   A checkpoint the claims journal may still name is never deleted: after a
   failed journal write its delete waits for the next write that lands, and a

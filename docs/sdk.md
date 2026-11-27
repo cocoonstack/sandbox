@@ -739,6 +739,11 @@ tenant.
   `Message`); claim, fork, checkpoint, renew, env and tenant verbs return it, and
   a 404/429/409 is matched on `Status`. Volume calls wrap it in
   `*sandbox.VolumeError`
+- a 503 `*APIError` whose `Message` ends in `; retry` is a designed pause (the
+  meta store is down, the node's lease is lost, the sandbox is moving to another node;
+  see the [API](sandboxd-api.md)). The node sends `Retry-After: 10`. The SDK
+  returns the error and does not resend: only a claim moves on to its other
+  redirect targets. The same call can be sent again
 - `*wire.ErrorResp` — a typed guest-side failure; `Kind` is one of
   `wire.KindBadRequest` (including a spawn the guest cannot start: missing
   binary, a cwd that is not a directory, no exec bit, a `User` the guest

@@ -567,7 +567,9 @@ archives. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
 token, 409 on the egress lane or when volumes are attached (neither kind of
 sandbox hibernates; see [egress](egress.md)) or on a failed sandbox, 429 while the disk is under
-[`disk_reserve`](deploy.md), 503 `lease lost; retry` for a replicated claim that
+[`disk_reserve`](deploy.md), 500 when the engine failed to take the snapshot
+(the sandbox is left running, or hibernated when the snapshot did land, and the
+call can be sent again), 503 `lease lost; retry` for a replicated claim that
 is not archived while its node's lease is overdue, even one already hibernated.
 
 ## POST /v1/sandboxes/{id}/wake
@@ -670,7 +672,7 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 (sandbox token); 404 unknown id or wrong sandbox token; 409 egress-lane or volume
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
-429 an [admission refusal](#admission-refusals); 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
+429 an [admission refusal](#admission-refusals); 500 when the engine failed the capture or a clone (no child is left, and the call can be sent again); 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -712,7 +714,10 @@ the export they were set on, which the new one replaces.
 configured pool, the template is owned by another tenant, or the sandbox is
 on the egress lane, has volumes attached (see [egress](egress.md)), has its
 [tun](#put-v1sandboxesidtun) turned off, has failed, or is archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
-sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 503
+sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 500
+when the capture or the publish to the template store failed (a failed publish
+can still have landed; the call can be sent again, since a promote replaces
+the template of that name), 503
 `lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
@@ -1009,7 +1014,10 @@ policy_source?, no_egress?, tun_off?, tun_profile?, egress_limit?, guest_env?}}`
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token, 409 egress-lane sandbox, one with volumes attached (see
 [egress](egress.md)), a failed one, or an archived one (`POST /wake` or an exec
-wakes it first), 429 while the disk is under [`disk_reserve`](deploy.md), 503 `lease lost; retry`
+wakes it first), 429 while the disk is under [`disk_reserve`](deploy.md), 500 when the capture
+or the publish to the checkpoint store failed (a failed capture leaves no checkpoint; a failed
+publish can still have landed, and a second call makes another checkpoint under a new id, so
+[list](#get-v1checkpoints) before sending it again), 503 `lease lost; retry`
 for a replicated sandbox while its node's lease is overdue.
 
 ## POST /v1/checkpoints/{id}/claim
