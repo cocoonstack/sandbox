@@ -82,7 +82,7 @@ func (w *Watcher) setErr(err error) {
 	w.err = err
 }
 
-// Watch streams filesystem events under path; events caused after it returns are guaranteed captured.
+// Watch returns once armed and streams events under path, excluding skipped directories.
 func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
 	var w *Watcher
 	err := s.retryMoved(ctx, func() error {

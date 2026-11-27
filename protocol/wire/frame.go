@@ -472,7 +472,7 @@ type Done struct{}
 
 func (Done) RespType() string { return "done" }
 
-// Ready acknowledges an armed watch (events after it are guaranteed captured), a connected port_forward or an attached lsp_request.
+// Ready acknowledges an armed watch, a connected port_forward or an attached lsp_request.
 type Ready struct{}
 
 func (Ready) RespType() string { return "ready" }

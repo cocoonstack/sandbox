@@ -316,7 +316,7 @@ class Sandbox:
         self._done_rpc("git_branch", unbounded=True, path=path, action="delete", name=name)
 
     def watch(self, path: str, recursive: bool = False) -> Watcher:
-        """Streams filesystem events under path; events after the returned Watcher exists are guaranteed captured."""
+        """Returns an armed watcher that streams events under path, excluding skipped directories."""
         conn, _ = self._open_stream("fs_watch", path=path, recursive=recursive or None)
         return Watcher(conn)
 
