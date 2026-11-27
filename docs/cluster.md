@@ -275,6 +275,10 @@ it while it sleeps write it, so the claim path is unchanged.
   the owner settles it when it returns, through its sweep or its restart.
   The epoch compare-and-set lets exactly one node win each,
   and `archive_delete` is recorded only for a row that was still archived.
+  A row delete that lands while its reply is lost records none, so
+  `archive_delete` is written at most once: the retention end on the claim's
+  `archive` event is the upper bound of the stored time, and the purge follows
+  it within the hourly sweep.
   Each node also settles its own rows against its claims, which converges a
   registry write whose reply was lost: a tombstone its archived claim still
   names is re-armed, a live row next to a claim that names another checkpoint
