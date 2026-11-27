@@ -32,7 +32,12 @@ const (
 
 	stallHeaders = "headers"
 	stallBody    = "body"
+	stallError   = "error"
+	stallStart   = "start"
 	slowBody     = "slow"
+
+	listCall   = "?list"
+	deleteCall = "?delete"
 )
 
 func TestS3BackendContract(t *testing.T) {
@@ -596,7 +601,7 @@ func TestFetchRequestsAStalledChunkAgain(t *testing.T) {
 	meta := metaJSON(id)
 	sum := sha256.Sum256([]byte("payload"))
 	chunkKey := "ck/chunks/" + id + "/" + hex.EncodeToString(sum[:])
-	for _, stage := range []string{stallHeaders, stallBody} {
+	for _, stage := range []string{stallHeaders, stallStart, stallBody} {
 		t.Run(stage, func(t *testing.T) {
 			fake := &fakeS3{objects: map[string][]byte{}, release: make(chan struct{})}
 			st := newTestStoreAt(t, fake, store.S3Config{FetchRetryBackoffMs: 1, StallTimeoutMs: 200})
@@ -633,6 +638,42 @@ func TestFetchKeepsABodyThatIsSlowButFlowing(t *testing.T) {
 	}
 	if got := fake.requestCount(http.MethodGet, chunkKey); got != 1 {
 		t.Errorf("chunk GETs = %d, want 1", got)
+	}
+}
+
+func TestACallWhoseReplyStallsEndsAtItsBudget(t *testing.T) {
+	const id = "ck_00000000000000a9"
+	metas := func(ctx context.Context, st *Store) error {
+		_, err := st.Metas(ctx, "")
+		return err
+	}
+	for _, tt := range []struct {
+		name  string
+		call  string
+		stage string
+		want  error
+		run   func(context.Context, *Store) error
+	}{
+		{"listing body", listCall, stallBody, context.DeadlineExceeded, metas},
+		{"delete headers", deleteCall, stallHeaders, context.DeadlineExceeded, func(ctx context.Context, st *Store) error { return st.Delete(ctx, id) }},
+		{"download error body", "ck/" + id + "/" + store.MetaFile, stallError, errStalled, metas},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeS3{objects: map[string][]byte{}, release: make(chan struct{})}
+			st := newTestStore(t, fake)
+			t.Cleanup(func() { close(fake.release) })
+			st.callBudget = 300 * time.Millisecond
+			publishRecord(t, st, id, metaJSON(id), "payload")
+			fake.setStall(tt.call, tt.stage)
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			if err := tt.run(ctx, st); !errors.Is(err, tt.want) || ctx.Err() != nil {
+				t.Fatalf("stalled call = %v (caller ctx %v), want the call's own budget to end it", err, ctx.Err())
+			}
+			if err := tt.run(ctx, st); err != nil {
+				t.Errorf("the call after the stalled one = %v, want it to succeed", err)
+			}
+		})
 	}
 }
 
@@ -1181,7 +1222,7 @@ type fakeS3 struct {
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/testbucket/")
-	if f.stall(w, r, key) {
+	if f.stall(w, r, stallKey(r, key)) {
 		return
 	}
 	if f.exportGate != nil && r.Method == http.MethodGet && strings.Contains(key, cmp.Or(f.gateOn, "/"+store.ExportDir)) {
@@ -1249,6 +1290,9 @@ func (f *fakeS3) setStall(key, stage string) {
 func (f *fakeS3) stall(w http.ResponseWriter, r *http.Request, key string) bool {
 	f.mu.Lock()
 	stage, body := f.stalls[key], f.objects[key]
+	if body == nil {
+		body = []byte("<Reply><Stalled/></Reply>")
+	}
 	if stage != "" {
 		delete(f.stalls, key)
 		f.requests[fakeRequest{method: r.Method, key: key}]++
@@ -1258,6 +1302,15 @@ func (f *fakeS3) stall(w http.ResponseWriter, r *http.Request, key string) bool 
 		return false
 	}
 	switch stage {
+	case stallError:
+		body = []byte("<Error><Code>ServiceUnavailable</Code></Error>")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write(body[:len(body)/2])
+		w.(http.Flusher).Flush()
+	case stallStart:
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.(http.Flusher).Flush()
 	case stallBody:
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		_, _ = w.Write(body[:len(body)/2])
@@ -1608,6 +1661,16 @@ func newTestStoreAt(t *testing.T, endpoint http.Handler, cfg store.S3Config) *St
 		t.Fatalf("New: %v", err)
 	}
 	return st
+}
+
+func stallKey(r *http.Request, key string) string {
+	switch query := r.URL.Query(); {
+	case query.Get("list-type") == "2":
+		return listCall
+	case query.Has("delete"):
+		return deleteCall
+	}
+	return key
 }
 
 func assertSingleMetaGet(t *testing.T, fake *fakeS3, metaKey string) {

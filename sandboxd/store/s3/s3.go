@@ -51,11 +51,12 @@ const (
 	defaultFetchRetryBackoffMs = 200
 	defaultStallTimeoutMs      = 30_000
 	transferBudget             = 30 * time.Minute
+	callBudget                 = 5 * time.Minute
 	maxManifestFiles           = 1 << 12
 )
 
 var (
-	errBodyStalled = errors.New("response body stalled")
+	errStalled = errors.New("response stalled")
 
 	chunkBufs = sync.Pool{New: func() any {
 		buf := make([]byte, store.DigestChunkSize)
@@ -107,6 +108,7 @@ type Store struct {
 	fetchAttempts int
 	fetchBackoff  time.Duration
 	stallTimeout  time.Duration
+	callBudget    time.Duration
 }
 
 // New builds the backend; ctx bounds the credential-chain resolution, and only a labeled store reads labels in Metas.
@@ -131,6 +133,7 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 		fetchAttempts: cmp.Or(cfg.FetchAttempts, defaultFetchAttempts),
 		fetchBackoff:  time.Duration(cmp.Or(cfg.FetchRetryBackoffMs, defaultFetchRetryBackoffMs)) * time.Millisecond,
 		stallTimeout:  time.Duration(cmp.Or(cfg.StallTimeoutMs, defaultStallTimeoutMs)) * time.Millisecond,
+		callBudget:    callBudget,
 	}
 	idle := max(awshttp.DefaultHTTPTransportMaxIdleConnsPerHost, st.uploadLimit, st.fetchLimit, st.metaReadLimit)
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
@@ -392,17 +395,19 @@ func (s *Store) readObject(ctx context.Context, key string, read bodyFunc) error
 func (s *Store) readObjectOnce(ctx context.Context, key string, read bodyFunc) (cut bool, err error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	idle := time.AfterFunc(s.callBudget, func() { cancel(errStalled) })
+	defer idle.Stop()
 	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &key})
 	if err != nil {
 		apiErr, ok := errors.AsType[smithy.APIError](err)
 		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
 			return false, store.ErrNotFound
 		}
-		return false, fmt.Errorf("object %s: %w", key, err)
+		return false, fmt.Errorf("object %s: %w", key, cmp.Or(context.Cause(ctx), err))
 	}
 	defer func() { _ = out.Body.Close() }()
-	body := &bodyReader{Reader: out.Body, stall: s.stallTimeout, idle: time.AfterFunc(s.stallTimeout, func() { cancel(errBodyStalled) })}
-	defer body.idle.Stop()
+	idle.Reset(s.stallTimeout)
+	body := &bodyReader{Reader: out.Body, stall: s.stallTimeout, idle: idle}
 	if err := read(out, body); err != nil {
 		return body.err != nil, fmt.Errorf("object %s: %w", key, cmp.Or(context.Cause(ctx), err))
 	}
@@ -588,7 +593,7 @@ func (s *Store) recordIDs(ctx context.Context, prefix string) ([]string, error) 
 		Bucket: &s.bucket, Prefix: new(s.prefix + prefix), Delimiter: new("/"),
 	})
 	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
+		page, err := s.nextPage(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("list %s: %w", s.prefix+prefix, err)
 		}
@@ -675,6 +680,8 @@ func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata
 }
 
 func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
+	ctx, cancel := context.WithTimeout(ctx, s.callBudget)
+	defer cancel()
 	objs := make([]s3types.ObjectIdentifier, len(keys))
 	for i := range keys {
 		objs[i] = s3types.ObjectIdentifier{Key: &keys[i]}
@@ -696,11 +703,17 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 	return nil
 }
 
+func (s *Store) nextPage(ctx context.Context, p *awss3.ListObjectsV2Paginator) (*awss3.ListObjectsV2Output, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.callBudget)
+	defer cancel()
+	return p.NextPage(ctx)
+}
+
 func (s *Store) list(ctx context.Context, prefix string) ([]s3types.Object, error) {
 	var objs []s3types.Object
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix})
 	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
+		page, err := s.nextPage(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("list %s: %w", prefix, err)
 		}

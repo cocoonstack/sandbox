@@ -430,7 +430,7 @@ connections across transfers instead of opening new ones.
 ### S3 retries and stall bounds
 
 The AWS SDK retries a failed request itself, and never a body it already
-returned. sandboxd closes the three gaps that leaves:
+returned. sandboxd closes the gaps that leaves:
 
 - A download whose body stops mid-read (`unexpected EOF`, a reset connection)
   is requested again. This covers chunks and the meta and manifest reads.
@@ -440,6 +440,9 @@ returned. sandboxd closes the three gaps that leaves:
   and the SDK retries it. This covers every call: downloads, uploads,
   listings and deletes. A listing or a delete whose reply is cut mid-body is
   also retried by the SDK.
+- A listing page, a delete batch and the wait for a download to start each
+  have 5 minutes, SDK retries included. One that stalls mid-reply fails then,
+  and the sweep or the call that made it runs again.
 
 Three optional `checkpoint_store.s3` fields set the bounds. Zero or absent
 keeps the default; a negative value is a config error.
