@@ -41,8 +41,10 @@ canceled ctx or a timeout with a `kill` of the pid `started` reported. The other
 connection-bound verbs are `fs_watch`, `pty_open`, `lsp_request`, and
 `port_forward`. `git_clone`, `git_pull` and `git_push` are bound too, and silkd
 watches their connection while git runs: when it ends, git's process group
-gets SIGTERM, and SIGKILL 10 s later if it is still there. A clone ended this
-way removes its partial directory, so the same clone can be sent again.
+gets SIGTERM, and SIGKILL if git has not exited and closed its output 10 s
+later. silkd does not follow a process a hook left behind. git removes a clone
+it was still fetching; a clone interrupted during its checkout, or killed,
+keeps its directory, and the caller removes it before sending the clone again.
 
 The authoritative wire contract is the shared fixture corpus in
 `protocol/wire/fixtures/v1`: the Go suite round-trips every fixture, Rust parses the requests and round-trips the responses, and the
