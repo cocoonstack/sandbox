@@ -27,6 +27,6 @@ func (e *Engine) Resize(ctx context.Context, name string, spec types.SizeSpec, s
 	if storage != "" {
 		args = append(args, "--storage", storage)
 	}
-	_, err := e.runFor(ctx, resizeTimeout, cmdTermGrace, append(args, name)...)
+	_, err := e.runFor(ctx, resizeTimeout, saveTermGrace, append(args, name)...)
 	return err
 }

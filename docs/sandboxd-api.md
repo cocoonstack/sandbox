@@ -1302,7 +1302,7 @@ its flows and stops its ARP answers, then sends the guest `tun_down`, except
 while a checkpoint, fork or replica capture holds the claim, when the guest
 keeps a `tun0` that carries nothing; enabling, or changing the profile, re-arms the packet door and sends `tun_up`.
 Enabling a claim of a `tun` pool that holds no overlay address, because the
-address store failed at its claim, allocates one. A fork child takes its
+address store failed at its claim or a resize moved it into the pool, allocates one. A fork child takes its
 parent's switch and label, with its own address.
 
 204 on success; 400 an unknown field or a `profile` that does not match the
@@ -1362,7 +1362,12 @@ The claim keeps its id, token, disk, env and lease, and takes the pool key of
 its template and lane at `size`. The node must have that pool. From then on
 the claim is a claim of that pool: its egress policy, archive and idle
 settings, reader and replication apply, and `GET /v1/sandboxes/{id}` reports
-the new `key` and `cpu_count`. The guest keeps its disk, so nothing a pool
+the new `key` and `cpu_count`. A clone of a promoted template keeps the
+egress policy, tun and replication settings of the pool its template was
+promoted from, and a claim made with
+`"egress": false` keeps no egress. The claim's tun state does not change: one that
+enters a `tun` pool holds no overlay address until
+[`PUT /v1/sandboxes/{id}/tun`](#put-v1sandboxesidtun) enables it. The guest keeps its disk, so nothing a pool
 does when it builds a VM (the image, the warmup) is applied again. A resize
 to the claim's own size is accepted: it grows the disk to the pool's
 `storage` and cold-boots the claim.
@@ -1374,8 +1379,8 @@ filesystem of an OCI image's disk with it; a disk never shrinks. Then the
 claim takes the new key, its hibernate snapshot is dropped, and its VM
 cold-boots: guest memory is lost, `restarts` moves, the guest env is written
 again, and the instance-metadata document is the caller's to send again. A
-claim past its lease that archives at expiry starts a fresh lease, as a
-[wake](#post-v1sandboxesidwake) gives. The usage journal records `resize` with
+claim past its lease that archives at expiry in the pool it leaves starts a
+fresh lease, as a [wake](#post-v1sandboxesidwake) gives. The usage journal records `resize` with
 the new shape when the claim takes the key, and `vmm_restart` when the boot
 starts.
 
@@ -1386,17 +1391,19 @@ size, a wake restores the snapshot and its size, and the same resize can be
 sent again. Once it has taken the key, the old memory image can no longer
 run: a cold boot that fails answers 500, and the claim is then one whose VMM
 is down, restarted or failed by the rows of
-[dead VMMs](deploy.md#dead-vmms-and-host-restarts). A call that was waiting
-for the claim while it resized answers 404, as after a move: look the claim
-up again. With `archive_failover`, a replica taken before the resize holds
+[dead VMMs](deploy.md#dead-vmms-and-host-restarts). A call that waited to
+wake the claim while it resized answers 503
+`sandbox changed while the call waited; retry`, and a control call that
+waited for it answers 404; send either again. With `archive_failover`, a replica taken before the resize holds
 the old size until the next one replaces it, and a failover in that window
 brings the claim back at its old size and key.
 
 204 on success; 400 an unknown `size` or an unknown field; 404 unknown id;
 409 `sandbox cannot resize` with the reason: the claim is not hibernated
 (running, archived or failed), the node has no pool of its template and lane
-at that size, its VM record is gone, or cocoon is below v0.8.1; 429 when `max_running` or `disk_reserve` refuses the boot;
-503 `sandbox moving to another node; retry` on a node that is evacuating, or
+at that size, its VM record is gone, it has volumes, or cocoon is below v0.8.1; 429 when `max_running` or `disk_reserve` refuses the boot;
+503 `sandbox moving to another node; retry` on a node that is evacuating or
+starts to while the VM resizes (the claim stays hibernated at its old size and moves), or
 `lease lost; retry`; 500 cocoon refused or failed the resize or the claims
 journal could not be written (the claim stays hibernated at its old size), or
 the cold boot failed after the claim took the new key.

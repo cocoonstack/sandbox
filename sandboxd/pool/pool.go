@@ -123,6 +123,7 @@ var (
 	ErrEvacuating          = errors.New("sandbox is moving to another node; retry")
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
 	ErrNotResizable        = errors.New("sandbox cannot resize")
+	ErrReplaced            = errors.New("sandbox changed while the call waited; retry")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
 	ErrQuota               = errors.New("admission refused")
 	ErrSleeping            = errors.New("sandbox is hibernated or archived and a reader may serve it")

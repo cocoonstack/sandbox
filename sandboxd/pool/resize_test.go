@@ -2,12 +2,15 @@ package pool
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
@@ -127,9 +130,8 @@ func TestAResizeWhoseColdBootFailsLeavesAClaimOnlyAColdBootCanRun(t *testing.T) 
 	}
 }
 
-func TestAResizePastTheLeaseOfATierClaimGivesAFreshLease(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(),
-		config.PoolSpec{PoolKey: testKey, ArchiveAfterSeconds: 3600}, config.PoolSpec{PoolKey: xlargeKey, ArchiveAfterSeconds: 3600})
+func TestAResizePastTheLeaseRenewsItByTheRuleOfThePoolTheClaimLeaves(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, ArchiveAfterSeconds: 3600}, config.PoolSpec{PoolKey: xlargeKey})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
@@ -143,7 +145,7 @@ func TestAResizePastTheLeaseOfATierClaimGivesAFreshLease(t *testing.T) {
 
 	got, _ := m.Sandbox(sb.ID)
 	if lease := time.Until(got.Deadline); lease < 59*time.Minute {
-		t.Fatalf("lease after a resize past the lease = %v, want the claim's hour again, as a wake gives", lease)
+		t.Fatalf("lease after a resize past the lease = %v, want the claim's hour again, as a wake in the pool it leaves gives", lease)
 	}
 	events := usageJournal(t, m)
 	i := slices.IndexFunc(events, func(ev usage.Event) bool { return ev.Event == "resize" })
@@ -153,6 +155,69 @@ func TestAResizePastTheLeaseOfATierClaimGivesAFreshLease(t *testing.T) {
 	m.reapOnce(t.Context())
 	if _, ok := m.byID(sb.ID); !ok {
 		t.Error("the reaper destroyed the resized claim")
+	}
+}
+
+func TestAClaimMadeWithoutAPoolLayerTakesTheLayerOfThePoolAResizeMovesItInto(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = outboundtest.SockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: xlargeKey})
+	editEgress(t, m, func(cfg *config.Config) {
+		cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}}}
+	})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", EgressClass: "desk"})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, ok := m.view.Load().out.Resolve(sb); !ok || sb.Layer != types.LayerUnpooled {
+		t.Fatalf("layer %q before the resize, want a claim of a key in no pool with its class's policy", sb.Layer)
+	}
+	hibernateClaim(t, m, sb)
+
+	if err = m.Resize(t.Context(), sb.ID, types.SizeXLarge); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+
+	next, _ := m.byID(sb.ID)
+	if _, ok := m.view.Load().out.Resolve(next); ok || next.Layer != types.LayerPooled {
+		t.Errorf("layer %q after the resize, want no egress, as a claim made from the policy-less pool has none", next.Layer)
+	}
+	if row := journaled(t, m)[sb.ID]; row == nil || row.Layer != types.LayerPooled {
+		t.Errorf("journaled %+v, want the pooled layer so a restart keeps it", row)
+	}
+
+	clone, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", EgressClass: "desk"})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	m.mu.Lock()
+	clone.PolicySource = types.PoolKey{Template: "promoted-from", Net: testKey.Net, Size: testKey.Size}
+	m.mu.Unlock()
+	hibernateClaim(t, m, clone)
+	if err = m.Resize(t.Context(), clone.ID, types.SizeXLarge); err != nil {
+		t.Fatalf("resize of a promoted template's clone: %v", err)
+	}
+	if next, _ = m.byID(clone.ID); next.Layer != types.LayerUnpooled {
+		t.Errorf("layer %q after the resize of a clone whose policy comes from another pool, want it unchanged", next.Layer)
+	}
+}
+
+func TestAResizeRefusesAClaimThatHoldsVolumes(t *testing.T) {
+	eng := newFakeEngine()
+	m := newResizeManager(t, eng, "")
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	m.mu.Lock()
+	sb.VolumesWant = []types.Volume{{Name: "v"}}
+	m.mu.Unlock()
+
+	err := m.Resize(t.Context(), sb.ID, types.SizeXLarge)
+
+	if !errors.Is(err, ErrNotResizable) || !strings.HasSuffix(err.Error(), ErrNotResizable.Error()+": volume mounts do not survive a cold boot") {
+		t.Errorf("resize of a claim with volumes = %v, want ErrNotResizable with the reason alone", err)
+	}
+	if len(eng.resizes) != 0 {
+		t.Errorf("engine resizes %v, want none", eng.resizes)
 	}
 }
 
@@ -175,13 +240,31 @@ func TestCallsThatMeetAResizeNeverRestoreTheOldMemoryImage(t *testing.T) {
 	}
 
 	for range cap(results) {
-		if err := <-results; err != nil && !errors.Is(err, ErrUnknownSandbox) {
-			t.Errorf("a call that met the resize = %v, want success or ErrUnknownSandbox", err)
+		if err := <-results; err != nil && !errors.Is(err, ErrReplaced) {
+			t.Errorf("a call that met the resize = %v, want success or the retry a replaced record answers", err)
 		}
 	}
 	if got, _ := m.Sandbox(sb.ID); got.Key != xlargeKey || got.Hibernated || len(eng.restores) != 0 {
 		t.Errorf("summary %+v with restores %v, want the running xlarge claim and no restore", got, eng.restores)
 	}
+}
+
+func TestAResizeThatAnEvacuationOvertakesLeavesTheClaimForIt(t *testing.T) {
+	eng := newFakeEngine()
+	m := newResizeManager(t, eng, "")
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	eng.resizeHook = func() {
+		m.mu.Lock()
+		m.evac = &evacuation{pending: maps.Clone(m.claimed), stop: func() {}}
+		m.mu.Unlock()
+	}
+
+	if err := m.Resize(t.Context(), sb.ID, types.SizeXLarge); !errors.Is(err, ErrEvacuating) {
+		t.Fatalf("resize overtaken by an evacuation = %v, want ErrEvacuating", err)
+	}
+
+	assertUnresized(t, m, eng, sb)
 }
 
 func TestAResizeThatCocoonRefusesChangesNothing(t *testing.T) {
@@ -200,10 +283,11 @@ func TestAResizeThatCocoonRefusesChangesNothing(t *testing.T) {
 
 func TestAResizeWhoseJournalWriteFailsIsUndone(t *testing.T) {
 	eng := newFakeEngine()
-	m := newResizeManager(t, eng, "")
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, ArchiveAfterSeconds: 3600}, config.PoolSpec{PoolKey: xlargeKey})
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	snap := sb.HibernateSnap
+	expire(m, sb)
+	snap, deadline := sb.HibernateSnap, sb.Deadline
 	breakStore(t, m)
 
 	if err := m.Resize(t.Context(), sb.ID, types.SizeXLarge); err == nil {
@@ -211,8 +295,8 @@ func TestAResizeWhoseJournalWriteFailsIsUndone(t *testing.T) {
 	}
 
 	healStore(t, m)
-	if sb.HibernateSnap != snap {
-		t.Fatalf("the undone record names snapshot %q, want %q back", sb.HibernateSnap, snap)
+	if sb.HibernateSnap != snap || !sb.Deadline.Equal(deadline) {
+		t.Fatalf("the undone record names snapshot %q and deadline %v, want %q and %v back", sb.HibernateSnap, sb.Deadline, snap, deadline)
 	}
 	assertUnresized(t, m, eng, sb)
 	if _, err := m.wakeResolved(t.Context(), sb); err != nil || len(eng.restores) != 1 {

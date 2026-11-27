@@ -2676,7 +2676,7 @@ func seedClaims(t *testing.T, dataDir string, claims map[string]*types.Sandbox) 
 
 func journaled(t *testing.T, m *Manager) map[string]*types.Sandbox {
 	t.Helper()
-	claims, err := newClaimStore(m.dataDir, false).load()
+	claims, err := newClaimStore(filepath.Dir(m.store.path), false).load()
 	if err != nil {
 		t.Fatalf("load journal: %v", err)
 	}

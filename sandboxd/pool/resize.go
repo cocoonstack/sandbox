@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -54,7 +55,7 @@ func (m *Manager) Resize(ctx context.Context, id string, size types.Size) error 
 		return fmt.Errorf("resize %s: %w", id, err)
 	}
 	if reason := coldBootBlocker(sb, found, volumes); reason != "" {
-		return fmt.Errorf("%w: %s", ErrNotResizable, reason)
+		return fmt.Errorf("%w: %s", ErrNotResizable, strings.TrimPrefix(reason, "vmm exited; "))
 	}
 	if err = m.beginWake(sb, false); err != nil {
 		return fmt.Errorf("resize %s: %w", id, err)
@@ -89,12 +90,17 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 	m.mu.Lock()
 	sb.Waking = false
 	m.store.recount(sb)
-	if m.claimed[sb.ID] != sb {
+	switch {
+	case m.claimed[sb.ID] != sb:
 		m.mu.Unlock()
 		return nil, "", ErrUnknownSandbox
+	case m.evacuatingLocked(sb.ID):
+		m.mu.Unlock()
+		return nil, "", ErrEvacuating
 	}
-	snap, readerSafe := sb.HibernateSnap, sb.ReaderSafe
+	snap, readerSafe, deadline := sb.HibernateSnap, sb.ReaderSafe, sb.Deadline
 	sb.HibernateSnap, sb.ReaderSafe = "", false
+	m.renewWokenLeaseLocked(sb)
 	dto := dtoOf(sb)
 	dto.Key = key
 	raw, err := json.Marshal(&dto)
@@ -102,7 +108,7 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 		err = json.Unmarshal(raw, next)
 	}
 	if err != nil {
-		sb.HibernateSnap, sb.ReaderSafe = snap, readerSafe
+		sb.HibernateSnap, sb.ReaderSafe, sb.Deadline = snap, readerSafe, deadline
 		m.mu.Unlock()
 		return nil, "", fmt.Errorf("copy the claim: %w", err)
 	}
@@ -111,8 +117,10 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 	}
 	next.StaleSnap, next.ReplicaDue = sb.StaleSnap, next.HasReplica()
 	next.SetEnv(next.Env)
+	if next.PolicyKey() == key {
+		next.Layer = types.LayerPooled
+	}
 	next.Touch()
-	m.renewWokenLeaseLocked(next)
 	m.dropClaimLocked(sb)
 	m.addClaimLocked(next)
 	js := m.store.set(next)
@@ -126,7 +134,7 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 		m.mu.Lock()
 		var rb claimSnapshot
 		if m.claimed[next.ID] == next {
-			sb.HibernateSnap, sb.ReaderSafe = snap, readerSafe
+			sb.HibernateSnap, sb.ReaderSafe, sb.Deadline = snap, readerSafe, deadline
 			m.dropClaimLocked(next)
 			m.addClaimLocked(sb)
 			rb = m.store.set(sb)
