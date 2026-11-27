@@ -220,6 +220,44 @@ func TestInterceptRejectsUntrustedUpstream(t *testing.T) {
 	}
 }
 
+func TestInterceptGivesUpOnAnUpstreamThatNeverAnswersTheTLSHandshake(t *testing.T) {
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = silent.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if conn, acceptErr := silent.Accept(); acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+	ca := testCA(t)
+	p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, nil, ca, fixedDial(silent.Addr().String()), nil, nil)
+	pools := p.pools.Load()
+	for name, tr := range map[string]*http.Transport{"direct": pools.tr, "intercept": pools.mitm, "routed": p.transport("socks5://127.0.0.1:1", true)} {
+		if tr.TLSHandshakeTimeout != interceptTimeout {
+			t.Errorf("%s transport TLS handshake timeout = %v, want %v", name, tr.TLSHandshakeTimeout, interceptTimeout)
+		}
+	}
+	pools.mitm.TLSHandshakeTimeout = 200 * time.Millisecond
+	front := serveFront(t, p)
+
+	tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", rootsFor(t, ca))
+	defer func() { _ = tc.Close() }()
+	resp := roundTripTLS(t, tc, http.MethodGet)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("silent upstream got %d, want 502", resp.StatusCode)
+	}
+	conn := <-accepted
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err = io.Copy(io.Discard, conn); err != nil {
+		t.Errorf("the proxy kept its upstream connection after the handshake timeout: %v", err)
+	}
+}
+
 func TestInterceptInjectsClaimCredentialsBelowThePoolSecret(t *testing.T) {
 	events := make(chan Event, 4)
 	secrets := credSecrets{fakeSecrets: fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}, creds: map[string][]Credential{"example.com": {
