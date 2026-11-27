@@ -549,10 +549,12 @@ w.close()
 ```
 
 `watch` returns once the guest acknowledges the watch is armed — events
-caused after it returns are guaranteed captured. A bad path fails
-synchronously; if the consumer falls too far behind, iteration raises the
-terminal overflow instead of silently dropping events. Iteration also ends
-when the relay drops, which `w.error` tells apart from a clean close (`None`).
+caused after it returns are guaranteed captured, except under a directory
+the guest cannot watch (a symlink loop, for example), which the watch skips.
+A bad path fails synchronously; if the consumer falls too far behind,
+iteration raises the terminal overflow instead of silently dropping events.
+Iteration also ends when the relay drops, which `w.error` tells apart from a
+clean close (`None`).
 
 ## Git
 
