@@ -715,8 +715,9 @@ configured pool, the template is owned by another tenant, or the sandbox is
 on the egress lane, has volumes attached (see [egress](egress.md)), has its
 [tun](#put-v1sandboxesidtun) turned off, has failed, or is archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
 sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 500
-when the capture or the publish to the template store failed (the template is
-as it was, and the call can be sent again), 503
+when the capture or the publish to the template store failed (a failed publish
+can still have landed; the call can be sent again, since a promote replaces
+the template of that name), 503
 `lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
@@ -1014,8 +1015,9 @@ policy_source?, no_egress?, tun_off?, tun_profile?, egress_limit?, guest_env?}}`
 token, 409 egress-lane sandbox, one with volumes attached (see
 [egress](egress.md)), a failed one, or an archived one (`POST /wake` or an exec
 wakes it first), 429 while the disk is under [`disk_reserve`](deploy.md), 500 when the capture
-or the publish to the checkpoint store failed (no checkpoint is listed, and the call can be sent
-again), 503 `lease lost; retry`
+or the publish to the checkpoint store failed (a failed capture leaves no checkpoint; a failed
+publish can still have landed, and a second call makes another checkpoint under a new id, so
+[list](#get-v1checkpoints) before sending it again), 503 `lease lost; retry`
 for a replicated sandbox while its node's lease is overdue.
 
 ## POST /v1/checkpoints/{id}/claim
