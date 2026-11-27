@@ -36,7 +36,7 @@ func TestBelowFloorComparesReleasesAndLeavesOthersUnknown(t *testing.T) {
 }
 
 func TestFeatureSupportFollowsTheCocoonVersion(t *testing.T) {
-	liveVolume, migrate := (*Engine).CheckLiveVolumeSupport, (*Engine).CheckMigrateSupport
+	liveVolume, migrate, resize := (*Engine).CheckLiveVolumeSupport, (*Engine).CheckMigrateSupport, (*Engine).CheckResizeSupport
 	for _, tt := range []struct {
 		check         func(*Engine, context.Context) error
 		floor         string
@@ -53,6 +53,9 @@ func TestFeatureSupportFollowsTheCocoonVersion(t *testing.T) {
 		{migrate, migrateFloor, "v0.7.7", false, true},
 		{migrate, migrateFloor, "unknown", false, true},
 		{migrate, migrateFloor, "v0.7.7", true, false},
+		{resize, resizeFloor, "v0.8.0", false, false},
+		{resize, resizeFloor, "v0.8.1", false, true},
+		{resize, resizeFloor, "v0.8.1", true, false},
 	} {
 		t.Run(fmt.Sprintf("floor=%s/%s/fail=%v", tt.floor, tt.version, tt.fail), func(t *testing.T) {
 			t.Setenv("COCOON_TEST_VERSION", tt.version)

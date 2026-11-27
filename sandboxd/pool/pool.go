@@ -122,7 +122,7 @@ var (
 	ErrTunRaced            = errors.New("another tun request to the sandbox committed first; retry")
 	ErrEvacuating          = errors.New("sandbox is moving to another node; retry")
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
-	ErrNotResizable        = errors.New("sandbox cannot resize: it must be hibernated and able to cold-boot")
+	ErrNotResizable        = errors.New("sandbox cannot resize")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
 	ErrQuota               = errors.New("admission refused")
 	ErrSleeping            = errors.New("sandbox is hibernated or archived and a reader may serve it")
@@ -157,7 +157,8 @@ type Engine interface {
 	RunCold(ctx context.Context, name string, key types.PoolKey, storage string) (types.VMRecord, error)
 	Remove(ctx context.Context, name string) error
 	Start(ctx context.Context, name string) error
-	Resize(ctx context.Context, name string, spec types.SizeSpec) error
+	CheckResizeSupport(ctx context.Context) error
+	Resize(ctx context.Context, name string, spec types.SizeSpec, storage string) error
 	Stop(ctx context.Context, name string) error
 	ReconcileStaleCreate(ctx context.Context, name string) (engine.StaleCreateOutcome, error)
 	SnapshotSave(ctx context.Context, vmName, snapName string) error

@@ -42,6 +42,8 @@ const (
 	liveVolumeFloor = "v0.7.2"
 	// migrateFloor adds live migration: capture rounds, receive and abort.
 	migrateFloor = "v0.7.7"
+	// resizeFloor adds vm resize for a stopped VM's vCPUs, memory and disk.
+	resizeFloor = "v0.8.1"
 
 	argName        = "--name"
 	argOutput      = "--output"
@@ -157,11 +159,6 @@ func (e *Engine) Remove(ctx context.Context, name string) error {
 // Start cold-boots a stopped VM from its own disk, or resumes a paused guest.
 func (e *Engine) Start(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "start", name)
-	return err
-}
-
-func (e *Engine) Resize(ctx context.Context, name string, spec types.SizeSpec) error {
-	_, err := e.run(ctx, "vm", "resize", "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory, name)
 	return err
 }
 

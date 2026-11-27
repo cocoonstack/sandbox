@@ -16,33 +16,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestResizeColdBootsAHibernatedClaimAtTheNewSize(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	if err := m.Resize(t.Context(), sb.ID, types.SizeXLarge); !errors.Is(err, ErrNotResizable) {
-		t.Errorf("resize of a running claim = %v, want ErrNotResizable", err)
-	}
-	hibernateClaim(t, m, sb)
-	if err := m.Resize(t.Context(), sb.ID, "huge"); !errors.Is(err, ErrBadKey) {
-		t.Errorf("resize to an unknown size = %v, want ErrBadKey", err)
-	}
-
-	if err := m.Resize(t.Context(), sb.ID, types.SizeXLarge); err != nil {
-		t.Fatalf("resize: %v", err)
-	}
-	if want := []string{sb.VMName + " 4/8G"}; !slices.Equal(eng.resizes, want) {
-		t.Errorf("engine resizes %v, want %v", eng.resizes, want)
-	}
-	got, _ := m.Sandbox(sb.ID)
-	if got.Key.Size != types.SizeXLarge || got.CPUCount != 4 || got.Hibernated || got.Restarts != 1 {
-		t.Errorf("summary %+v, want a 4-vCPU xlarge claim cold-booted out of hibernation", got)
-	}
-	if row := journaled(t, m)[sb.ID]; row == nil || row.Key.Size != types.SizeXLarge || row.HibernateSnap != "" {
-		t.Errorf("journaled %+v, want the xlarge key without a hibernate snapshot", row)
-	}
-}
-
 func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

@@ -479,6 +479,7 @@ type VMNetConfig struct {
 type VMConfig struct {
 	Name        string `json:"name"`
 	ImageDigest string `json:"image_digest,omitempty"`
+	Storage     int64  `json:"storage,omitzero"`
 }
 
 // VMDisk is one hot-attached disk that `cocoon vm inspect` reports.
