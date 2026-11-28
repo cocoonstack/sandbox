@@ -813,6 +813,17 @@ func TestAnEvacuatingSandboxAnswersRetry(t *testing.T) {
 	}
 }
 
+func TestACallThatWaitedOnAReplacedRecordAnswersTheRetryTextAlone(t *testing.T) {
+	mgr := &fakeManager{socket: func(id, _ string) (string, error) { return "", fmt.Errorf("wake %s: %w", id, pool.ErrReplaced) }}
+	ts := newTestServer(t, "", mgr, nil)
+	resp := doReq(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/exec", "tok", `{"argv":["true"]}`)
+	defer resp.Body.Close()
+	body := decodeJSON[map[string]string](t, resp.Body)
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" || body["error"] != pool.ErrReplaced.Error() {
+		t.Errorf("status %d Retry-After %q error %q, want 503 with Retry-After and %q", resp.StatusCode, resp.Header.Get("Retry-After"), body["error"], pool.ErrReplaced.Error())
+	}
+}
+
 func TestPutPoolsUpdatesTargets(t *testing.T) {
 	var got []config.PoolSpec
 	mgr := &fakeManager{
