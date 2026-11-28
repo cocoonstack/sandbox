@@ -217,7 +217,7 @@ func TestReplicaRefusedPutDropsTheCopyAndItsExport(t *testing.T) {
 	replicateNow(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+		if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 			t.Errorf("adopt: %v %v", adopted, err)
 		}
 	}}
@@ -495,7 +495,7 @@ func TestReplicaInFlightRoundCannotRecreateARowTheAdopterFinished(t *testing.T) 
 	replicateNow(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+		if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 			t.Errorf("adopt: %v %v", adopted, err)
 		}
 		if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {

@@ -2623,14 +2623,14 @@ func mustFlush(t *testing.T, m *Manager) {
 
 func mustAdopt(t *testing.T, m *Manager, sb *types.Sandbox, step string) {
 	t.Helper()
-	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+	if adopted, err := m.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 		t.Fatalf("%s: %v %v, want adopted", step, adopted, err)
 	}
 }
 
 func mustNotAdopt(t *testing.T, m *Manager, sb *types.Sandbox, step string) {
 	t.Helper()
-	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || adopted {
+	if adopted, err := m.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || adopted {
 		t.Fatalf("%s: %v %v, want refused", step, adopted, err)
 	}
 }

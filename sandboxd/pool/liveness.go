@@ -415,7 +415,7 @@ func (m *Manager) settleColdBootLocked(ctx context.Context, sb *types.Sandbox) e
 	default:
 		go m.dropSnap(ctx, snap)
 	}
-	if m.disarmIfReleased(sb) {
+	if m.disarmIfReleased(sb, true) {
 		return ErrUnknownSandbox
 	}
 	sb.Touch()

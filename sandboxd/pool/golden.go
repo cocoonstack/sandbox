@@ -89,7 +89,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, p *pool, 
 	if err = m.eng.SettleGuest(ctx, sock); err != nil {
 		log.WithFunc("pool.buildGoldenSteps").Warnf(ctx, "capture golden of %s before its guest settled: %v", key.Template, err)
 	}
-	if err := m.dumpGolden(ctx, p, name, snap, final, imageID); err != nil {
+	if err := m.dumpGolden(ctx, p, name, snap, final); err != nil {
 		return err
 	}
 	stamp := m.goldenStamp(v, key, imageID)
@@ -202,7 +202,7 @@ func (m *Manager) imageIDs(ctx context.Context) map[string]string {
 	return ids
 }
 
-func (m *Manager) dumpGolden(ctx context.Context, p *pool, name, snap, final, imageID string) error {
+func (m *Manager) dumpGolden(ctx context.Context, p *pool, name, snap, final string) error {
 	select {
 	case m.goldenDumps <- struct{}{}:
 	case <-ctx.Done():
@@ -212,10 +212,10 @@ func (m *Manager) dumpGolden(ctx context.Context, p *pool, name, snap, final, im
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
-	return m.exportGolden(ctx, p, snap, final, imageID)
+	return m.exportGolden(ctx, p, snap, final)
 }
 
-func (m *Manager) exportGolden(ctx context.Context, p *pool, snap, final, imageID string) error {
+func (m *Manager) exportGolden(ctx context.Context, p *pool, snap, final string) error {
 	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+"-*.tmp")
 	if err != nil {
 		return fmt.Errorf("stage golden: %w", err)
@@ -230,11 +230,5 @@ func (m *Manager) exportGolden(ctx context.Context, p *pool, snap, final, imageI
 	if err := os.Rename(final, filepath.Join(staging, "old")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("clear golden dir: %w", err)
 	}
-	if err := os.Rename(tmp, final); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	p.imageID = imageID
-	m.mu.Unlock()
-	return nil
+	return os.Rename(tmp, final)
 }

@@ -4,7 +4,6 @@ package moves
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -21,14 +20,6 @@ var (
 	ErrUnavailable = errors.New("move registry down")
 	// ErrLost answers a compare-and-set whose record is gone, at another epoch, or in another state.
 	ErrLost = errors.New("move record moved on")
-
-	advances = map[[2]State]bool{
-		{Pending, Final}:     true,
-		{Final, Committed}:   true,
-		{Committed, Started}: true,
-		{Pending, Aborted}:   true,
-		{Final, Aborted}:     true,
-	}
 )
 
 // State is where a move stands; Started and Aborted end it.
@@ -56,12 +47,4 @@ type Registry interface {
 	Delete(ctx context.Context, id string, epoch int64) error
 	// Stale returns the records last written before before.
 	Stale(ctx context.Context, before time.Time) ([]Record, error)
-}
-
-// VerifyAdvance refuses a state change no move makes.
-func VerifyAdvance(from, to State) error {
-	if !advances[[2]State{from, to}] {
-		return fmt.Errorf("move state %s cannot advance to %s", from, to)
-	}
-	return nil
 }

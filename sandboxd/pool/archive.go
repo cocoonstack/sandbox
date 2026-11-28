@@ -274,7 +274,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if bootErr != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, bootErr)
 	}
-	if m.disarmIfReleased(sb) {
+	if m.disarmIfReleased(sb, true) {
 		return "", ErrUnknownSandbox
 	}
 	return sb.VsockSocket, nil

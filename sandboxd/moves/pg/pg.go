@@ -49,9 +49,6 @@ func (r *Registry) Begin(ctx context.Context, id, from, to string) (int64, error
 }
 
 func (r *Registry) Advance(ctx context.Context, id string, expect int64, from, to moves.State) (int64, error) {
-	if err := moves.VerifyAdvance(from, to); err != nil {
-		return 0, err
-	}
 	return cas.Advance(ctx, r.pool, `UPDATE sandboxd_moves SET state = $5, epoch = nextval('sandboxd_moves_epoch'), updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND state = $4
 		RETURNING epoch`, r.cell, id, expect, from, to)

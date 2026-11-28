@@ -280,7 +280,7 @@ func TestAFullPeerLeavesTheWakeOnItsOwnerAndTheRetryAsksNoPeer(t *testing.T) {
 	var asked atomic.Int32
 	a.WithPeerAdopt(func(ctx context.Context, id, token string, room bool) bool {
 		asked.Add(1)
-		adopted, err := b.adopt(ctx, id, peerCred(token), room)
+		adopted, err := b.Adopt(ctx, id, peerCred(token), room)
 		return err == nil && adopted
 	})
 	for range 2 {

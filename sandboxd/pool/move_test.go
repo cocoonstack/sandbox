@@ -543,7 +543,7 @@ func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 			t.Error("the replica row is still adoptable at the commit")
 		}
 		mc.reg.Expire("a")
-		if adopted, err := third.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); adopted || err != nil {
+		if adopted, err := third.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); adopted || err != nil {
 			t.Errorf("a third node adopts the moving claim: %v %v", adopted, err)
 		}
 		_ = mc.reg.Renew(t.Context(), "a", time.Hour)

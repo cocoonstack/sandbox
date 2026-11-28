@@ -271,7 +271,7 @@ func TestASqueezedNodeAdoptsForRecoveryButNotForAWake(t *testing.T) {
 	c.expire("a")
 	a.Drain(t.Context())
 	b.memoryLow.Store(true)
-	if adopted, err := b.AdoptForWake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || adopted {
+	if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, true); err != nil || adopted {
 		t.Fatalf("adopt for a wake on a squeezed node: %v %v, want refused", adopted, err)
 	}
 	mustAdopt(t, b, sb, "adopt on a squeezed node outside a wake")
