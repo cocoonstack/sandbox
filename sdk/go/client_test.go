@@ -706,15 +706,23 @@ func TestCloseReportsAPeerThatCouldNotAnswerTheLookup(t *testing.T) {
 }
 
 func TestCloseReportsAPeerThatCannotBeReached(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	dead := ln.Addr().String()
-	_ = ln.Close()
-	err = goneSandboxAt(t, dead).Close()
+	err := goneSandboxAt(t, retiredAddr(t)).Close()
 	if _, answered := errors.AsType[*APIError](err); err == nil || answered {
 		t.Fatalf("Close: %v, want the dial error of the peer that could not be asked", err)
+	}
+}
+
+func TestCloseReportsAFailedPeerDiscovery(t *testing.T) {
+	old := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/peers" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	err := testSandbox(t, old).Close()
+	if he, ok := errors.AsType[*APIError](err); !ok || he.Status != http.StatusServiceUnavailable {
+		t.Fatalf("Close: %v, want the peer listing's 503", err)
 	}
 }
 

@@ -194,7 +194,7 @@ func (s *Sandbox) Close() error {
 		return err
 	}
 	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
-	if err == nil && lookupErr != nil && !errors.Is(lookupErr, errNoOwner) {
+	if err == nil && (nodeFault(lookupErr) || lookupErr != nil && !errors.Is(lookupErr, errNoOwner)) {
 		return lookupErr
 	}
 	if lookupErr != nil {
