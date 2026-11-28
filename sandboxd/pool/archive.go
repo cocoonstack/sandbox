@@ -235,7 +235,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err != nil {
 		return "", fmt.Errorf("wake %s: fetch archive: %w", sb.ID, err)
 	}
-	built, coldBooted, err := m.cloneArchive(ctx, sb, dir)
+	built, coldBoot, err := m.cloneArchive(ctx, sb, dir)
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
@@ -248,7 +248,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.destroy(ctx, built.VMName)
 		return "", fmt.Errorf("wake %s: track archive checkpoint: %w", sb.ID, markErr)
 	}
-	if err = m.commitWake(ctx, sb, built, coldBooted); err != nil {
+	if err = m.commitWake(ctx, sb, built); err != nil {
 		m.destroy(ctx, built.VMName)
 		return "", err
 	}
@@ -257,11 +257,11 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.counters.wakeMemoryFallbacks.Add(1)
 	}
 	logger := log.WithFunc("pool.wakeArchived")
-	if coldBooted {
-		logger.Warnf(ctx, "woke %s by a cold boot of its archive's disk; guest memory is lost", sb.ID)
-	}
+	var bootErr error
 	// Only the none lane reaches here, so there is no NIC to re-lock
-	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
+	if coldBoot {
+		bootErr = m.restartLocked(ctx, sb)
+	} else if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
 	// The pre-commit marker keeps a failed delete retryable after the journal update.
@@ -271,10 +271,13 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.clearMark(ctx, ck)
 		m.dropTombstone(ctx, sb.ID, consumed)
 	}
+	if bootErr != nil {
+		return "", fmt.Errorf("wake %s: %w", sb.ID, bootErr)
+	}
 	if m.disarmIfReleased(sb) {
 		return "", ErrUnknownSandbox
 	}
-	return built.VsockSocket, nil
+	return sb.VsockSocket, nil
 }
 
 // handOffForRoom runs one capacity hand-off at a time and reports whether a peer adopted the claim; the caller holds Transition.
@@ -302,7 +305,7 @@ func (m *Manager) handOffForRoom(ctx context.Context, sb *types.Sandbox) bool {
 	return false
 }
 
-func (m *Manager) cloneArchive(ctx context.Context, sb *types.Sandbox, dir string) (built *types.Sandbox, coldBooted bool, err error) {
+func (m *Manager) cloneArchive(ctx context.Context, sb *types.Sandbox, dir string) (built *types.Sandbox, coldBoot bool, err error) {
 	clone := func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, dir, name, sb.Key) }
 	var sock string
 	for range wakeRestoreTries {
@@ -318,59 +321,30 @@ func (m *Manager) cloneArchive(ctx context.Context, sb *types.Sandbox, dir strin
 		}
 		log.WithFunc("pool.cloneArchive").Warnf(ctx, "%s did not answer after a clone of its archive: %v", sb.ID, err)
 	}
-	if err = m.coldBootClone(ctx, sb, built); err != nil {
+	if err = m.eng.Stop(ctx, built.VMName); err != nil {
 		m.destroy(ctx, built.VMName)
-		return nil, false, err
+		return nil, false, fmt.Errorf("stop before cold boot: %w", err)
 	}
 	return built, true, nil
 }
 
-func (m *Manager) coldBootClone(ctx context.Context, sb, built *types.Sandbox) error {
-	if err := m.eng.Stop(ctx, built.VMName); err != nil {
-		return fmt.Errorf("stop before cold boot: %w", err)
-	}
-	if err := m.eng.Start(ctx, built.VMName); err != nil {
-		return fmt.Errorf("cold boot: %w", err)
-	}
-	sock, err := m.probeReady(ctx, built.VMName, built.VsockSocket, coldProbeTimeout)
-	if err != nil {
-		return fmt.Errorf("probe after cold boot: %w", err)
-	}
-	built.VsockSocket = sock
-	m.mu.Lock()
-	env := sb.Env
-	m.mu.Unlock()
-	if !env.HasGuest() {
-		return nil
-	}
-	if err = m.eng.WriteGuestEnv(ctx, sock, env.GuestFile()); err != nil {
-		return fmt.Errorf("write env after cold boot: %w", err)
-	}
-	return nil
-}
-
-func (m *Manager) commitWake(ctx context.Context, sb, built *types.Sandbox, coldBooted bool) error {
+func (m *Manager) commitWake(ctx context.Context, sb, built *types.Sandbox) error {
 	m.mu.Lock()
 	if m.claimed[sb.ID] != sb {
 		m.mu.Unlock()
 		return ErrUnknownSandbox
 	}
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
-	restarts, restartedAt, rebootPending := sb.Restarts, sb.RestartedAt, sb.RebootPending
 	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = built.VsockSocket, "", 0, false
 	sb.ImageID = cmp.Or(built.ImageID, sb.ImageID)
 	m.setVMNameLocked(sb, built.VMName)
 	wokeAt := time.Now()
-	if coldBooted {
-		sb.Restarts, sb.RestartedAt, sb.RebootPending = sb.Restarts+1, wokeAt, false
-	}
 	sb.Deadline = wokeAt.Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
 	js, lease := m.store.set(sb), sb.Deadline
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		rb, _ := m.setIfLive(sb, func() {
 			sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline, sb.ReaderSafe = "", ck, epoch, deadline, safe
-			sb.Restarts, sb.RestartedAt, sb.RebootPending = restarts, restartedAt, rebootPending
 			m.setVMNameLocked(sb, "")
 		})
 		m.store.recommit(ctx, rb)

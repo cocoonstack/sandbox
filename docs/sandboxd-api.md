@@ -600,8 +600,12 @@ stays billed as running. A restored VM that cannot be stopped is not
 cold-booted: the wake fails and the claim stays hibernated until the next wake
 restores the snapshot again. An archived sandbox whose guest does not answer
 after two clones of its archive is cold-booted from the second clone's disk:
-memory is lost, `restarts` moves, and the wake records `unarchive` once it
-commits; a cold boot that fails removes the clone, and the claim stays archived.
+the wake stops that clone, records `unarchive` when it commits, and boots it as
+a cold restart (memory is lost, `restarts` moves, `vmm_restart`). A boot that
+fails records `vmm_exit`, keeps the stopped clone as the claim's VM and leaves
+the claim to liveness, which restarts it within its budget or fails it; the
+archive is spent. Only a clone that cannot be stopped fails the wake with the
+claim still archived.
 The same holds for a wake that an agent access triggers. 204 on
 success, 404 unknown id or wrong token, or an archived sandbox the node had no
 room for that it [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-node)

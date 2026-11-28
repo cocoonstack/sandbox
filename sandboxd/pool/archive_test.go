@@ -428,46 +428,65 @@ func TestAnArchivedWakeWhoseClonesStaySilentColdBootsTheLastClone(t *testing.T) 
 	}
 }
 
-func TestAnArchivedWakeWhoseColdBootFailsKeepsTheArchive(t *testing.T) {
-	for _, tt := range []struct {
-		name       string
-		probeFails int
-		stopErr    error
-		starts     int
-	}{
-		{"cold boot stays silent", wakeRestoreTries + 1, nil, 1},
-		{"clone cannot be stopped", wakeRestoreTries, errors.New("stop failed"), 0},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			eng := newFakeEngine()
-			m := newTestManager(t, eng, archivePool(keepAnHour))
-			sb := mustClaim(t, m, testKey)
-			mustArchive(t, m, sb)
-			ck, clonesBefore := sb.ArchiveCk, eng.cloneCount()
-			eng.probeFails, eng.stopErr = tt.probeFails, tt.stopErr
+func TestAnArchivedWakeWhoseCloneCannotBeStoppedKeepsTheArchive(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(keepAnHour))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	ck, clonesBefore := sb.ArchiveCk, eng.cloneCount()
+	eng.probeFails, eng.stopErr = wakeRestoreTries, errors.New("stop failed")
 
-			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-				t.Fatal("wake succeeded, want the failed cold boot to fail it")
-			}
-			if len(eng.starts) != tt.starts {
-				t.Errorf("starts %v, want %d", eng.starts, tt.starts)
-			}
-			for _, vm := range eng.clones[clonesBefore:] {
-				if !eng.removed(vm) {
-					t.Errorf("clone %s kept, want every clone of the failed wake removed", vm)
-				}
-			}
-			if got, _ := m.Sandbox(sb.ID); !got.Archived || got.Restarts != 0 || !ckExists(t, m, ck) {
-				t.Errorf("summary %+v, want the claim still archived on its checkpoint", got)
-			}
-			if got := usageEventsOf(t, m, sb.ID); strings.Contains(got, "unarchive") {
-				t.Errorf("events %q, want no unarchive from a failed wake", got)
-			}
-			eng.probeFails, eng.stopErr = 0, nil
-			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-				t.Errorf("wake after the guest recovers: %v", err)
-			}
-		})
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("wake succeeded, want the clone that cannot be stopped to fail it")
+	}
+	if len(eng.starts) != 0 {
+		t.Errorf("starts %v, want no cold boot", eng.starts)
+	}
+	for _, vm := range eng.clones[clonesBefore:] {
+		if !eng.removed(vm) {
+			t.Errorf("clone %s kept, want every clone of the failed wake removed", vm)
+		}
+	}
+	if got, _ := m.Sandbox(sb.ID); !got.Archived || got.Restarts != 0 || !ckExists(t, m, ck) {
+		t.Errorf("summary %+v, want the claim still archived on its checkpoint", got)
+	}
+	if got := usageEventsOf(t, m, sb.ID); strings.Contains(got, "unarchive") {
+		t.Errorf("events %q, want no unarchive from a failed wake", got)
+	}
+	eng.probeFails, eng.stopErr = 0, nil
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Errorf("wake after the guest recovers: %v", err)
+	}
+}
+
+func TestAnArchivedWakeWhoseColdBootFailsLeavesTheClaimToLiveness(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(keepAnHour))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	ck, clonesBefore := sb.ArchiveCk, eng.cloneCount()
+	eng.probeFails = wakeRestoreTries + 1
+
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("wake succeeded, want the failed cold boot to fail it")
+	}
+	clones := eng.clones[clonesBefore:]
+	last := clones[len(clones)-1]
+	if !slices.Equal(eng.starts, []string{last}) || eng.removed(last) || last != lockedVMName(sb) || !eng.stopped[last] {
+		t.Errorf("starts %v, want one cold boot of the last clone %s, left stopped as the claim's VM", eng.starts, last)
+	}
+	if got, _ := m.Sandbox(sb.ID); got.Archived || got.Restarts != 0 || got.Failed != "" || ckExists(t, m, ck) {
+		t.Errorf("summary %+v, want the checkpoint consumed and the claim running-shaped with no restart", got)
+	}
+	if events := usageEventsOf(t, m, sb.ID); !strings.HasSuffix(events, "archive,unarchive,vmm_restart,vmm_exit") {
+		t.Errorf("events %s, want the unarchive, then the failed cold boot's restart and exit", events)
+	}
+	runLiveness(t, m)
+	if got, _ := m.Sandbox(sb.ID); got.Restarts != 1 || got.Failed != "" {
+		t.Errorf("summary after the liveness pass %+v, want the claim restarted from its disk", got)
+	}
+	if events := usageEventsOf(t, m, sb.ID); !strings.HasSuffix(events, "unarchive,vmm_restart,vmm_exit,vmm_restart") {
+		t.Errorf("events %s, want the liveness pass's restart", events)
 	}
 }
 
@@ -906,21 +925,6 @@ func TestArchivedClaimRollsBackOnPersistFailure(t *testing.T) {
 				m.mu.Unlock()
 				if !archived {
 					t.Error("wake did not roll the record back to archived on a failed persist")
-				}
-			},
-		},
-		{
-			name:  "cold-boot wake",
-			setup: func(m *Manager, _ *types.Sandbox) { fakeOf(m).probeFails = wakeRestoreTries },
-			act: func(t *testing.T, m *Manager, sb *types.Sandbox, ck string) {
-				if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-					t.Fatal("wake succeeded despite a persist failure")
-				}
-				m.mu.Lock()
-				rolledBack := sb.ArchiveCk == ck && sb.VMName == "" && sb.Restarts == 0 && sb.RestartedAt.IsZero()
-				m.mu.Unlock()
-				if !rolledBack {
-					t.Error("wake did not roll the cold boot back to an archived record with no restart")
 				}
 			},
 		},
