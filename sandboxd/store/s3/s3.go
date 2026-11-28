@@ -140,6 +140,7 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 		t.MaxIdleConnsPerHost = idle
 		t.MaxIdleConns = max(t.MaxIdleConns, idle)
 		t.ResponseHeaderTimeout = st.stallTimeout
+		t.HTTP2 = &http.HTTP2Config{SendPingTimeout: st.stallTimeout / 2, PingTimeout: st.stallTimeout / 2}
 	})
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region), awsconfig.WithHTTPClient(httpClient))
 	if err != nil {

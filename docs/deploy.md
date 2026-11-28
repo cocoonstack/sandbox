@@ -441,6 +441,9 @@ returned. sandboxd closes the gaps that leaves:
   and the SDK retries it. This covers every call: downloads, uploads,
   listings and deletes. A listing or a delete whose reply is cut mid-body is
   also retried by the SDK.
+- On HTTP/2, a connection that delivers nothing for half of `stall_timeout_ms`
+  is pinged, and closed when the ping gets no answer in the other half, so a
+  retry does not go out on a dead pooled connection.
 - A listing page, a delete batch and the wait for a download to start each
   have 5 minutes, SDK retries included. One that stalls mid-reply fails then,
   and the sweep or the call that made it runs again.

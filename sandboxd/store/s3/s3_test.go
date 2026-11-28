@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"encoding/pem"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -604,7 +607,7 @@ func TestFetchRequestsAStalledChunkAgain(t *testing.T) {
 	for _, stage := range []string{stallHeaders, stallStart, stallBody} {
 		t.Run(stage, func(t *testing.T) {
 			fake := &fakeS3{objects: map[string][]byte{}, release: make(chan struct{})}
-			st := newTestStoreAt(t, fake, store.S3Config{FetchRetryBackoffMs: 1, StallTimeoutMs: 200})
+			st := newTestStoreAt(t, fake, store.S3Config{FetchRetryBackoffMs: 1, StallTimeoutMs: 1000})
 			t.Cleanup(func() { close(fake.release) })
 			publishRecord(t, st, id, meta, "payload")
 			fake.setStall(chunkKey, stage)
@@ -638,6 +641,45 @@ func TestFetchKeepsABodyThatIsSlowButFlowing(t *testing.T) {
 	}
 	if got := fake.requestCount(http.MethodGet, chunkKey); got != 1 {
 		t.Errorf("chunk GETs = %d, want 1", got)
+	}
+}
+
+func TestFetchDialsAgainWhenThePooledH2ConnectionGoesSilent(t *testing.T) {
+	const id = "ck_00000000000000ac"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	var h1 atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			h1.Add(1)
+		}
+		fake.ServeHTTP(w, r)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	bundle := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatalf("write CA bundle: %v", err)
+	}
+	t.Setenv("AWS_CA_BUNDLE", bundle)
+	fwd := newSilencer(t, srv.Listener.Addr().String())
+	st := newTestStoreAtURL(t, "https://"+fwd.ln.Addr().String(), store.S3Config{StallTimeoutMs: 1000})
+	publishRecord(t, st, id, metaJSON(id), "payload")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	for _, dropped := range fwd.silence() {
+		select {
+		case <-dropped:
+		case <-ctx.Done():
+			t.Fatal("a pooled connection that answers nothing stayed in the pool")
+		}
+	}
+	if _, _, _, err := st.Fetch(ctx, id); err != nil {
+		t.Fatalf("Fetch = %v, want it served over a new connection", err)
+	}
+	if n := h1.Load(); n != 0 {
+		t.Fatalf("%d requests arrived over HTTP/1, want every one over HTTP/2", n)
 	}
 }
 
@@ -1234,9 +1276,6 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.requests == nil {
-		f.requests = map[fakeRequest]int{}
-	}
 	f.requests[fakeRequest{method: r.Method, key: key}]++
 	query := r.URL.Query()
 	switch {
@@ -1289,6 +1328,9 @@ func (f *fakeS3) setStall(key, stage string) {
 
 func (f *fakeS3) stall(w http.ResponseWriter, r *http.Request, key string) bool {
 	f.mu.Lock()
+	if f.requests == nil {
+		f.requests = map[fakeRequest]int{}
+	}
 	stage, body := f.stalls[key], f.objects[key]
 	if body == nil {
 		body = []byte("<Reply><Stalled/></Reply>")
@@ -1650,12 +1692,17 @@ func newTestStoreAt(t *testing.T, endpoint http.Handler, cfg store.S3Config) *St
 	t.Helper()
 	ts := httptest.NewServer(endpoint)
 	t.Cleanup(ts.Close)
+	return newTestStoreAtURL(t, ts.URL, cfg)
+}
+
+func newTestStoreAtURL(t *testing.T, endpoint string, cfg store.S3Config) *Store {
+	t.Helper()
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 
 	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
 	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
-	cfg.Bucket, cfg.Prefix, cfg.Endpoint, cfg.Region, cfg.ForcePathStyle = "testbucket", "ck/", ts.URL, "us-east-1", true
+	cfg.Bucket, cfg.Prefix, cfg.Endpoint, cfg.Region, cfg.ForcePathStyle = "testbucket", "ck/", endpoint, "us-east-1", true
 	st, err := New(t.Context(), cfg, t.TempDir(), store.CheckpointIDRe, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1764,4 +1811,96 @@ func (g *chunkGate) leave() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.inflight--
+}
+
+type silentPair struct {
+	client, server net.Conn
+	muted          atomic.Bool
+	dropped        chan struct{}
+}
+
+func (p *silentPair) pipe(dst, src net.Conn) {
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := src.Read(buf)
+		if p.muted.Load() {
+			if err != nil {
+				return
+			}
+			continue
+		}
+		if _, werr := dst.Write(buf[:n]); werr != nil || err != nil {
+			_ = dst.Close()
+			return
+		}
+	}
+}
+
+type silencer struct {
+	ln net.Listener
+
+	mu     sync.Mutex
+	closed bool
+	pairs  []*silentPair
+}
+
+func (s *silencer) serve(target string) {
+	for {
+		client, err := s.ln.Accept()
+		if err != nil {
+			return
+		}
+		server, err := net.Dial("tcp", target)
+		if err != nil {
+			_ = client.Close()
+			continue
+		}
+		p := &silentPair{client: client, server: server, dropped: make(chan struct{})}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			_, _ = client.Close(), server.Close()
+			return
+		}
+		s.pairs = append(s.pairs, p)
+		s.mu.Unlock()
+		go func() {
+			defer close(p.dropped)
+			p.pipe(server, client)
+		}()
+		go p.pipe(client, server)
+	}
+}
+
+func (s *silencer) silence() []<-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	drops := make([]<-chan struct{}, len(s.pairs))
+	for i, p := range s.pairs {
+		p.muted.Store(true)
+		drops[i] = p.dropped
+	}
+	return drops
+}
+
+func (s *silencer) close() {
+	_ = s.ln.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	for _, p := range s.pairs {
+		_, _ = p.client.Close(), p.server.Close()
+	}
+}
+
+func newSilencer(t *testing.T, target string) *silencer {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s := &silencer{ln: ln}
+	t.Cleanup(s.close)
+	go s.serve(target)
+	return s
 }
