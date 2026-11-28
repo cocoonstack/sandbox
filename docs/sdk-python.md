@@ -613,7 +613,8 @@ zero. `undrain()` lifts only a drain and `uncordon()` only a
 
 - `APIError(verb, status, message)` — control plane (HTTP status)
   - a 503 whose message ends in `; retry` is a designed pause (the meta store
-    is down, the node's lease is lost, the sandbox is moving to another node; see the
+    is down, the node's lease is lost, the sandbox is moving to another node, a
+    resize replaced the sandbox while the call waited; see the
     [API](sandboxd-api.md)). The node sends `Retry-After: 10`. The SDK raises
     the error and does not resend: only a claim moves on to its other redirect
     targets. The same call can be sent again

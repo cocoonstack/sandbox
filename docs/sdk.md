@@ -740,7 +740,8 @@ tenant.
   a 404/429/409 is matched on `Status`. Volume calls wrap it in
   `*sandbox.VolumeError`
 - a 503 `*APIError` whose `Message` ends in `; retry` is a designed pause (the
-  meta store is down, the node's lease is lost, the sandbox is moving to another node;
+  meta store is down, the node's lease is lost, the sandbox is moving to another node,
+  a resize replaced the sandbox while the call waited;
   see the [API](sandboxd-api.md)). The node sends `Retry-After: 10`. The SDK
   returns the error and does not resend: only a claim moves on to its other
   redirect targets. The same call can be sent again
