@@ -574,7 +574,9 @@ sandbox hibernates; see [egress](egress.md)) or on a failed sandbox, 429 while t
 (the guest resumes and the call can be sent again; a guest that does not resume
 is marked failed) or when the claims journal write failed after the snapshot
 landed (the sandbox is then hibernated), 503 `lease lost; retry` for a replicated claim that
-is not archived while its node's lease is overdue, even one already hibernated.
+is not archived while its node's lease is overdue, even one already hibernated, or
+`sandbox changed while the call waited; retry` when a [resize](#post-v1sandboxesidresize)
+of it ran while the call waited.
 
 ## POST /v1/sandboxes/{id}/wake
 
