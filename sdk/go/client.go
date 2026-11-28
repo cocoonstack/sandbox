@@ -155,6 +155,9 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 	}
 	addrs, peersErr := c.peersOrErr(ctx)
+	if _, answered := errors.AsType[*APIError](peersErr); peersErr != nil && !answered {
+		unreached.CompareAndSwap(nil, &peersErr)
+	}
 	owner, ok := scatter(ctx, addrs, probe)
 	if !ok {
 		if he := down.Load(); he != nil {

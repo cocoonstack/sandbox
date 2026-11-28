@@ -726,6 +726,22 @@ func TestCloseReportsAFailedPeerDiscovery(t *testing.T) {
 	}
 }
 
+func TestCloseReportsAPeerListingThatGotNoAnswer(t *testing.T) {
+	old := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/peers" {
+			if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	err := testSandbox(t, old).Close()
+	if _, answered := errors.AsType[*APIError](err); err == nil || answered {
+		t.Fatalf("Close: %v, want the peer listing's transport error", err)
+	}
+}
+
 func TestCloseOfASandboxNoPeerHoldsIsNotAnError(t *testing.T) {
 	if err := goneSandbox(t, http.StatusNotFound).Close(); err != nil {
 		t.Fatalf("Close: %v, want nil for a sandbox no node holds", err)
