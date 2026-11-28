@@ -299,7 +299,7 @@ removing it again restores the class alone. A
 [resize](sandboxd-api.md#post-v1sandboxesidresize): a claim made
 without a pool layer that it moves into a pool is that pool's claim from then
 on, with its policy or, when the pool has none, no egress; a clone of a
-promoted template keeps the layer of the pool its template came from. Secrets are registered separately and
+promoted template, or a fork or branch of one, keeps the layer of the pool its template came from. Secrets are registered separately and
 referenced by name — the value comes from the environment, never the config
 file: a claim's own `guest: false` env first, the node's second
 ([below](#claim-env-and-secrets)).
