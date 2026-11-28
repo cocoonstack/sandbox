@@ -182,7 +182,7 @@ func (s *Sandbox) Renew(ctx context.Context, ttl time.Duration) (time.Time, erro
 	return rr.Deadline, nil
 }
 
-// Close releases the sandbox on its node, bounded internally and without a ctx to stay defer-friendly; releasing one already gone is not an error.
+// Close releases the sandbox on its node, bounded internally and without a ctx to stay defer-friendly; releasing one already gone is not an error unless a node answers its lookup with a 5xx.
 func (s *Sandbox) Close() error {
 	s.pool.drain()
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)

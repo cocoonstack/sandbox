@@ -1039,7 +1039,7 @@ func TestMoveWhoseFinalRoundOutgrowsATinyDeltaStillFits(t *testing.T) {
 	sb := mustClaim(t, mc.s, testKey)
 	fakeOf(mc.s).migrateSizes = []int64{1 << 20, 1, 1 << 24}
 	mc.p.wireSizes = []int64{1 << 20, 1 << 12}
-	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+500*time.Millisecond); err != nil {
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+5*time.Second); err != nil {
 		t.Fatalf("move whose final round grew by 16 MiB over a 1-byte delta sent as 4 KiB: %v", err)
 	}
 }

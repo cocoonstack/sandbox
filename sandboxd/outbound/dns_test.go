@@ -152,10 +152,10 @@ func TestDNSDoorDisarmEndsAnOpenConnection(t *testing.T) {
 		t.Fatalf("armed door answers %v, want two addresses", got)
 	}
 	h.Disarm(sb.ID, false)
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	_ = writeDNSMsg(conn, packQuery(t, dnsmessage.Header{ID: 1}, "public.test."))
-	if answer, err := readDNSMsg(conn, dnsMsgMax); err == nil {
-		t.Fatalf("a disarmed door answered %d bytes on a connection opened while armed", len(answer))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, err := conn.Read(make([]byte, 1))
+	if ne, ok := errors.AsType[net.Error](err); err == nil || ok && ne.Timeout() {
+		t.Fatalf("read on an idle connection after the disarm = %v, want it closed by the door", err)
 	}
 }
 

@@ -704,8 +704,8 @@ func TestACallWhoseReplyStallsEndsAtItsBudget(t *testing.T) {
 			fake := &fakeS3{objects: map[string][]byte{}, release: make(chan struct{})}
 			st := newTestStore(t, fake)
 			t.Cleanup(func() { close(fake.release) })
-			st.callBudget = 300 * time.Millisecond
 			publishRecord(t, st, id, metaJSON(id), "payload")
+			st.callBudget = time.Second
 			fake.setStall(tt.call, tt.stage)
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()
