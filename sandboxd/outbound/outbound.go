@@ -427,10 +427,7 @@ func (h *Host) armProxy(ctx context.Context, sb *types.Sandbox, bindBoot unixBin
 	if d.dns != nil {
 		d.resolver = newResolver(evCtx, h, c.fenced, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
 	}
-	h.mu.Lock()
-	published := publishReserved(h.doors, id, d)
-	h.mu.Unlock()
-	if !published {
+	if !h.publishReserved(h.doors, id, d) {
 		d.close()
 		return nil
 	}
@@ -445,6 +442,17 @@ func (h *Host) armProxy(ctx context.Context, sb *types.Sandbox, bindBoot unixBin
 	}
 	h.armTun(ctx, sb, d, v, c)
 	return nil
+}
+
+func (h *Host) publishReserved[V any](slots map[string]*V, id string, v *V) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	held, reserved := slots[id]
+	if !reserved || held != nil {
+		return false
+	}
+	slots[id] = v
+	return true
 }
 
 func (h *Host) dropReservation[V any](slots map[string]*V, id string) {
