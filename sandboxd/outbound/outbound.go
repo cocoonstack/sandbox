@@ -76,6 +76,7 @@ type Host struct {
 	self         atomic.Pointer[[]netip.Addr]
 	ns           atomic.Pointer[nameserverList]
 	dnsMalformed atomic.Uint64
+	bootOnce     sync.Once
 
 	mu       sync.Mutex
 	doors    map[string]*doors
@@ -84,7 +85,6 @@ type Host struct {
 	preboots map[string]*net.UnixListener
 	taps     map[string]string
 	bootQ    []queuedBoot
-	bootOnce sync.Once
 
 	// limitMu orders each read of a claim's cap with its apply, so an older read never lands last.
 	limitMu sync.Mutex
