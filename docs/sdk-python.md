@@ -136,8 +136,8 @@ sb = client.lookup(id, token)  # lists the peers, then probes the entry node and
 ```
 
 When no node confirms the sandbox and one answered a 5xx (a peer adopting it
-while the meta store is down, for example), `lookup` raises that error instead
-of a 404 "no owner found".
+while the meta store is down, for example) or could not be reached (status 0),
+`lookup` raises that error instead of a 404 "no owner found".
 
 ## Claiming
 
@@ -172,7 +172,7 @@ cloned a promoted template; it is empty for other sources. `Sandbox` is a
 context manager; `sb.close()` releases it (it follows a sandbox that moved to
 another node with a lookup, also when that node is gone; releasing one already
 gone is not an error — double-release and reap races stay silent — unless a
-node answers that lookup with a 5xx, which is raised). Every other
+node answers that lookup with a 5xx or cannot be reached, which is raised). Every other
 call follows a move too: a 404 or a refused connection from the owner runs
 `client.lookup` once, and the call is sent again to a different owner, since
 every argument (stdin, file data, tar streams) is bytes. `find_iter` also retries

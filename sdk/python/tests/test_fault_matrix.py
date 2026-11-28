@@ -210,7 +210,7 @@ def test_lookup_returns_the_first_owner_without_waiting_for_a_slow_peer(spawn_no
     assert sb.owner == "10.0.0.9:7777"
 
 
-def test_lookup_all_miss(spawn_node, dead_addr):
+def test_lookup_raises_a_peer_it_could_not_reach_instead_of_no_owner(spawn_node, dead_addr):
     entry = spawn_node(
         {
             ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
@@ -219,7 +219,7 @@ def test_lookup_all_miss(spawn_node, dead_addr):
     )
     with pytest.raises(APIError) as exc:
         Client(entry).lookup("sb_1", "tok")
-    assert exc.value.status == 404 and "no owner found" in exc.value.message
+    assert exc.value.status == 0, exc.value
 
 
 def test_lookup_raises_a_node_error_instead_of_no_owner(spawn_node):
@@ -325,6 +325,13 @@ def test_close_raises_a_peer_error_instead_of_already_gone(spawn_node):
     with pytest.raises(APIError) as exc:
         gone_sandbox(spawn_node, 503).close()
     assert exc.value.status == 503, exc.value
+
+
+def test_close_raises_when_a_peer_cannot_be_reached(spawn_node, dead_addr):
+    old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [dead_addr]})})
+    with pytest.raises(APIError) as info:
+        Client(old).attach(old, "sb_1", "tok").close()
+    assert info.value.status == 0, info.value
 
 
 def test_close_of_a_sandbox_no_peer_holds_is_not_an_error(spawn_node):

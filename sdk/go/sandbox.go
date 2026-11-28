@@ -182,7 +182,7 @@ func (s *Sandbox) Renew(ctx context.Context, ttl time.Duration) (time.Time, erro
 	return rr.Deadline, nil
 }
 
-// Close releases the sandbox on its node, bounded internally and without a ctx to stay defer-friendly; releasing one already gone is not an error unless a node answers its lookup with a 5xx.
+// Close releases the sandbox on its node, bounded internally and without a ctx to stay defer-friendly; releasing one already gone is not an error unless a node answers its lookup with a 5xx or cannot be reached.
 func (s *Sandbox) Close() error {
 	s.pool.drain()
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
@@ -194,7 +194,7 @@ func (s *Sandbox) Close() error {
 		return err
 	}
 	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
-	if err == nil && nodeFault(lookupErr) {
+	if err == nil && lookupErr != nil && !errors.Is(lookupErr, errNoOwner) {
 		return lookupErr
 	}
 	if lookupErr != nil {
