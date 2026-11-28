@@ -10,7 +10,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator
-from typing import Any, BinaryIO, Protocol, TypeVar, cast
+from typing import Any, BinaryIO, Protocol, Self, cast
 
 from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError, _error_message, _mark_gone
 from .frames import MAX_FRAME, decode_response, encode_request
@@ -21,11 +21,9 @@ _READ_BUFFER = 64 * 1024
 _SEND_SLICE = 16 * 1024
 _TCP_KEEPALIVE = {"TCP_KEEPIDLE": 15, "TCP_KEEPALIVE": 15, "TCP_KEEPINTVL": 15, "TCP_KEEPCNT": 9}
 
-_CloseableT = TypeVar("_CloseableT", bound="_Closeable")
-
 
 class _Closeable(Protocol):
-    def __enter__(self: _CloseableT) -> _CloseableT:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:
