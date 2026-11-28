@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -115,10 +114,7 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 	sb.HibernateSnap, sb.ReaderSafe = "", false
 	m.renewWokenLeaseLocked(sb)
 	next.ClaimRecord = dtoOf(sb)
-	next.Key, next.Metadata, next.Env = key, maps.Clone(sb.Metadata), maps.Clone(sb.Env)
-	if sb.MoveOut != nil {
-		next.MoveOut = new(*sb.MoveOut)
-	}
+	next.Key = key
 	if next.VolumesWant == nil {
 		next.VolumesWant = next.Volumes
 	}
