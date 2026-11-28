@@ -334,6 +334,16 @@ def test_close_raises_when_a_peer_cannot_be_reached(spawn_node, dead_addr):
     assert info.value.status == 0, info.value
 
 
+def test_close_raises_when_the_peer_listing_gets_no_answer(spawn_node):
+    def drop(body, path):
+        raise ConnectionResetError("peer listing dropped")
+
+    old = spawn_node({("GET", "/v1/peers"): drop})
+    with pytest.raises(APIError) as info:
+        Client(old).attach(old, "sb_1", "tok").close()
+    assert info.value.status == 0, info.value
+
+
 def test_close_of_a_sandbox_no_peer_holds_is_not_an_error(spawn_node):
     gone_sandbox(spawn_node, 404).close()
 
