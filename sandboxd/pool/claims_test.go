@@ -240,6 +240,33 @@ func TestClaimStoreConcurrentCommits(t *testing.T) {
 	}
 }
 
+func TestClaimsFileMatchesGolden(t *testing.T) {
+	sb, seen := goldenClaim()
+	s := newClaimStore(t.TempDir(), false)
+	if err := s.commit(s.setSeen(map[string]*types.Sandbox{sb.ID: sb}, seen)); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	got, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "claims.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("claims.json drifted from the golden:\n got %s\nwant %s", got, want)
+	}
+	loaded, err := newClaimStore("testdata", false).load()
+	if err != nil {
+		t.Fatalf("load golden: %v", err)
+	}
+	back := loaded[sb.ID]
+	if back == nil || len(loaded) != 1 || !reflect.DeepEqual(dtoOf(back), dtoOf(sb)) || !back.SeenAtShutdown.Equal(seen) {
+		t.Fatalf("golden decodes to %+v, want %+v", back, sb)
+	}
+}
+
 func recommitGoroutines(t *testing.T) int {
 	t.Helper()
 	var profile bytes.Buffer
@@ -261,4 +288,29 @@ func recommitGoroutines(t *testing.T) int {
 		}
 	}
 	return n
+}
+
+func goldenClaim() (*types.Sandbox, time.Time) {
+	at := time.Date(2026, 11, 28, 1, 2, 3, 4, time.UTC)
+	guest := false
+	sb := &types.Sandbox{
+		ID: "sb_golden", VMName: "sbx-golden", Key: testKey, Token: "tok", TokenSHA256: "sum",
+		Deadline: at.Add(time.Hour), ClaimedAt: at, LeaseSeconds: 3600, Layer: types.LayerPooled,
+		PolicySource: types.PoolKey{Template: "src", Net: types.NetEgress, Size: types.SizeLarge}, NoEgress: true,
+		Tenant: "acme", EgressClass: "desk", ClaimRef: "ref-1", Metadata: types.Metadata{"team": "infra"}, OnExpire: types.ExpireArchive,
+		Volumes:     []types.Volume{{Name: "data", Mount: "/data", Mode: types.VolumeModeRW, AttachOnly: true}},
+		VolumesWant: []types.Volume{{Name: "data", Mount: "/data", Mode: types.VolumeModeRW, AttachOnly: true}, {Name: "more"}},
+		Env: types.Env{"API_KEY": {Value: "secret", Guest: &guest, Inject: &types.EnvInject{
+			Hosts: []string{"api.example.com"}, Header: "Authorization", Query: "key", Body: true, Placeholder: "PH",
+		}, Missing: true}},
+		VsockSocket: "/run/vsock", TAP: "tap0", TunAddr: netip.MustParseAddr("100.64.0.2"), TunOff: true, TunProfile: "eu",
+		TunBytes: 42, EgressLimit: types.EgressLimit{TxBytesPerSecond: 1, RxBytesPerSecond: 2},
+		HibernateSnap: "hib", PendingSnap: "pend", SaveSnap: "save", ReaderSafe: true,
+		ArchiveCk: "ck-a", ArchiveEpoch: 7, ArchivePending: "ck-p", ReplicaCk: "ck-r", ReplicaPending: "ck-rp", ReplicaAt: at.Add(time.Minute),
+		FromCheckpoint: "ck-from", ImageID: "img", Restarts: 3, RestartedAt: at.Add(2 * time.Minute), BootID: "boot",
+		RebootPending: true, Failed: "vmm exited", MoveOut: &types.MoveOut{Epoch: 9, Series: "ser", Addr: "10.0.0.1:1", To: "node-b"},
+		MoveIn: true, ColdBooting: true,
+	}
+	sb.Hold()
+	return sb, at.Add(3 * time.Minute)
 }

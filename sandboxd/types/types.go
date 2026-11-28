@@ -266,8 +266,8 @@ type namedVar struct {
 	v    EnvVar
 }
 
-// Sandbox is the node-local record of one pooled or claimed VM.
-type Sandbox struct {
+// ClaimRecord is the persisted part of a Sandbox, the form claims.json, archive rows and move commits carry.
+type ClaimRecord struct {
 	ID     string  `json:"id"`
 	VMName string  `json:"vm_name"`
 	Key    PoolKey `json:"key"`
@@ -299,7 +299,7 @@ type Sandbox struct {
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
 	// VolumesWant is the durable target, including additions not yet confirmed.
-	VolumesWant []Volume `json:"volumes_want"`
+	VolumesWant []Volume `json:"volumes_want,omitzero"`
 	// Env is replaced whole through SetEnv under the manager mutex; host-only values are never served back.
 	Env Env `json:"env,omitempty"`
 
@@ -335,14 +335,10 @@ type Sandbox struct {
 
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 	ImageID        string `json:"image_id,omitempty"`
-	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
-	TemplateDigest string `json:"-"`
 
 	// Restarts counts the cold boots that replaced an exited VMM or a wake image that never answered, and the reboots inside the guest; each loses guest memory.
-	Restarts      int       `json:"restarts,omitzero"`
-	RestartedAt   time.Time `json:"restarted_at,omitzero"`
-	BootID        string    `json:"boot_id,omitempty"`
-	RebootPending bool      `json:"reboot_pending,omitzero"`
+	Restarts    int       `json:"restarts,omitzero"`
+	RestartedAt time.Time `json:"restarted_at,omitzero"`
 	// Failed names why the VMM is down and not restarted; empty means the claim is serviceable.
 	Failed string `json:"failed,omitempty"`
 	// MoveOut journals a live move this node runs as the source; nil when none.
@@ -350,7 +346,17 @@ type Sandbox struct {
 	// MoveIn marks a claim a live move delivered here and this node has not started yet.
 	MoveIn         bool      `json:"move_in,omitzero"`
 	ColdBooting    bool      `json:"cold_booting,omitzero"`
+	BootID         string    `json:"boot_id,omitempty"`
+	RebootPending  bool      `json:"reboot_pending,omitzero"`
 	SeenAtShutdown time.Time `json:"last_seen,omitzero"`
+}
+
+// Sandbox is the node-local record of one pooled or claimed VM.
+type Sandbox struct {
+	ClaimRecord
+
+	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
+	TemplateDigest string `json:"-"`
 	// RestartLog holds the recent restart attempts that the loop budget counts; guarded by Transition.
 	RestartLog []time.Time `json:"-"`
 	// ExitRecorded marks a VMM exit already journaled as vmm_exit; guarded by Transition.

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,60 +30,9 @@ type claimSnapshot struct {
 	seq uint64
 }
 
-// claimDTO is the persisted projection of a Sandbox, copied so commit marshals off m.mu.
-type claimDTO struct {
-	ID             string             `json:"id"`
-	VMName         string             `json:"vm_name"`
-	Key            types.PoolKey      `json:"key"`
-	Token          string             `json:"token,omitempty"`
-	TokenSHA256    string             `json:"token_sha256,omitempty"`
-	Deadline       time.Time          `json:"deadline,omitzero"`
-	ClaimedAt      time.Time          `json:"claimed_at,omitzero"`
-	LeaseSeconds   int                `json:"lease_seconds,omitzero"`
-	Layer          types.PolicyLayer  `json:"policy_layer,omitempty"`
-	PolicySource   types.PoolKey      `json:"policy_source,omitzero"`
-	NoEgress       bool               `json:"no_egress,omitzero"`
-	Tenant         string             `json:"tenant,omitempty"`
-	EgressClass    string             `json:"egress_class,omitempty"`
-	ClaimRef       string             `json:"claim_ref,omitempty"`
-	Metadata       types.Metadata     `json:"metadata,omitempty"`
-	OnExpire       types.ExpireAction `json:"on_expire,omitempty"`
-	Volumes        []types.Volume     `json:"volumes,omitempty"`
-	VolumesWant    []types.Volume     `json:"volumes_want,omitzero"`
-	Env            types.Env          `json:"env,omitempty"`
-	VsockSocket    string             `json:"vsock_socket,omitempty"`
-	TAP            string             `json:"tap,omitempty"`
-	TunAddr        netip.Addr         `json:"tun_addr,omitzero"`
-	TunOff         bool               `json:"tun_off,omitzero"`
-	TunProfile     string             `json:"tun_profile,omitempty"`
-	TunBytes       int64              `json:"tun_bytes,omitzero"`
-	EgressLimit    types.EgressLimit  `json:"egress_limit,omitzero"`
-	HibernateSnap  string             `json:"hibernate_snap,omitempty"`
-	PendingSnap    string             `json:"pending_snap,omitempty"`
-	SaveSnap       string             `json:"save_snap,omitempty"`
-	ReaderSafe     bool               `json:"reader_safe,omitzero"`
-	ArchiveCk      string             `json:"archive_ck,omitempty"`
-	ArchiveEpoch   int64              `json:"archive_epoch,omitzero"`
-	ArchivePending string             `json:"archive_pending,omitempty"`
-	ReplicaCk      string             `json:"replica_ck,omitempty"`
-	ReplicaPending string             `json:"replica_pending,omitempty"`
-	ReplicaAt      time.Time          `json:"replica_at,omitzero"`
-	FromCheckpoint string             `json:"from_checkpoint,omitempty"`
-	ImageID        string             `json:"image_id,omitempty"`
-	Restarts       int                `json:"restarts,omitzero"`
-	RestartedAt    time.Time          `json:"restarted_at,omitzero"`
-	Failed         string             `json:"failed,omitempty"`
-	MoveOut        *types.MoveOut     `json:"move_out,omitempty"`
-	MoveIn         bool               `json:"move_in,omitzero"`
-	ColdBooting    bool               `json:"cold_booting,omitzero"`
-	BootID         string             `json:"boot_id,omitempty"`
-	RebootPending  bool               `json:"reboot_pending,omitzero"`
-	LastSeen       time.Time          `json:"last_seen,omitzero"`
-}
-
 // claimRow keeps its encoded member until set replaces the row; set never edits one.
 type claimRow struct {
-	dto     claimDTO
+	dto     types.ClaimRecord
 	raw     []byte
 	running bool
 }
@@ -194,7 +142,7 @@ func (s *claimStore) put(id string, sb *types.Sandbox) {
 			dto.Env = dto.Env.DropHostValues()
 		}
 		if !s.flushedAt.IsZero() {
-			dto.LastSeen = seenBy(sb, s.flushedAt)
+			dto.SeenAtShutdown = seenBy(sb, s.flushedAt)
 		}
 		row := &claimRow{dto: dto, running: holdsVM(sb)}
 		if row.running {
@@ -290,7 +238,7 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 			if err != nil {
 				return err
 			}
-			row.raw, row.dto = raw, claimDTO{}
+			row.raw, row.dto = raw, types.ClaimRecord{}
 		}
 		if i > 0 {
 			s.buf = append(s.buf, ',')
@@ -413,27 +361,18 @@ func (s *claimStore) checkpointReferences() map[string]struct{} {
 	return refs
 }
 
-func encodeRow(dto *claimDTO) ([]byte, error) {
-	raw, err := json.Marshal(map[string]*claimDTO{dto.ID: dto})
+func encodeRow(dto *types.ClaimRecord) ([]byte, error) {
+	raw, err := json.Marshal(map[string]*types.ClaimRecord{dto.ID: dto})
 	if err != nil {
 		return nil, fmt.Errorf("encode claim %s: %w", dto.ID, err)
 	}
 	return raw[1 : len(raw)-1], nil
 }
 
-func dtoOf(sb *types.Sandbox) claimDTO {
-	return claimDTO{
-		ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token, TokenSHA256: sb.TokenSHA256,
-		Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt, LeaseSeconds: sb.LeaseSeconds, Layer: sb.Layer,
-		PolicySource: sb.PolicySource, NoEgress: sb.NoEgress,
-		Tenant: sb.Tenant, EgressClass: sb.EgressClass, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
-		Volumes: slices.Clone(sb.Volumes), VolumesWant: volumesWantDTO(sb), Env: sb.Env, VsockSocket: sb.VsockSocket,
-		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap, SaveSnap: sb.SaveSnap, ReaderSafe: sb.ReaderSafe,
-		TunAddr: sb.TunAddr, TunOff: sb.TunOff, TunProfile: sb.TunProfile, TunBytes: sb.TunBytes, EgressLimit: sb.EgressLimit,
-		ArchiveCk: sb.ArchiveCk, ArchiveEpoch: sb.ArchiveEpoch, ArchivePending: sb.ArchivePending, ReplicaCk: sb.ReplicaCk, ReplicaPending: sb.ReplicaPending, ReplicaAt: sb.ReplicaAt, FromCheckpoint: sb.FromCheckpoint, ImageID: sb.ImageID,
-		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed, MoveOut: sb.MoveOut, MoveIn: sb.MoveIn,
-		ColdBooting: sb.ColdBooting, BootID: sb.BootID, RebootPending: sb.RebootPending,
-	}
+func dtoOf(sb *types.Sandbox) types.ClaimRecord {
+	dto := sb.ClaimRecord
+	dto.Volumes, dto.VolumesWant, dto.SeenAtShutdown = slices.Clone(sb.Volumes), volumesWantDTO(sb), time.Time{}
+	return dto
 }
 
 // volumesWantDTO persists the desired set only when it differs; absent reads back as equal to Volumes.

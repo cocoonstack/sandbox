@@ -27,6 +27,7 @@ func TestResizeMovesAHibernatedClaimToTheTargetPoolAndColdBootsIt(t *testing.T) 
 	}
 	hibernateClaim(t, m, sb)
 	snap := sb.HibernateSnap
+	sb.Metadata, sb.Env = types.Metadata{"team": "infra"}, types.Env{"MODE": {Value: "prod"}}
 	if err := m.Resize(t.Context(), sb.ID, "huge"); !errors.Is(err, ErrBadKey) {
 		t.Errorf("resize to an unknown size = %v, want ErrBadKey", err)
 	}
@@ -65,6 +66,10 @@ func TestResizeMovesAHibernatedClaimToTheTargetPoolAndColdBootsIt(t *testing.T) 
 	}
 	if next, _ := m.byID(sb.ID); next == sb || sb.Key != testKey || sb.HibernateSnap != "" {
 		t.Errorf("published record is the old one (%v), the old record's key moved to %v, or it still names snapshot %q", next == sb, sb.Key, sb.HibernateSnap)
+	}
+	sb.Metadata["team"], sb.Env["MODE"] = "old", types.EnvVar{Value: "old"}
+	if next, _ := m.byID(sb.ID); next.Metadata["team"] != "infra" || next.Env["MODE"].Value != "prod" {
+		t.Errorf("replaced record metadata %v env %v, want maps detached from the old record", next.Metadata, next.Env)
 	}
 	if _, err := m.wakeResolved(t.Context(), sb); err != nil || len(eng.restores) != 0 {
 		t.Errorf("wake through the replaced record = %v with restores %v, want it to reach the running guest and restore nothing", err, eng.restores)
