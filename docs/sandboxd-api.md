@@ -1402,7 +1402,7 @@ carries that shape; wake it, hibernate it and send the resize again.
 204 on success; 400 an unknown `size` or an unknown field; 404 unknown id;
 409 `sandbox cannot resize` with the reason: the claim is not hibernated
 (running, archived or failed), the node has no pool of its template and lane
-at that size, the resize would leave an inject host of its env not intercepted or with a header a pool secret already sets, its VM record is gone, it has volumes, or cocoon is below v0.8.1; 429 when `max_running` or `disk_reserve` refuses the boot;
+at that size, its VM record is gone, it has volumes, or cocoon is below v0.8.1; 429 when `max_running` or `disk_reserve` refuses the boot;
 503 `sandbox moving to another node; retry` on a node that is evacuating or
 starts to while the VM resizes (the claim stays hibernated at its old size and moves), or
 `lease lost; retry` for a replicated claim whose node's lease is overdue at the start or when the claim would take the key; 500 cocoon refused or failed the resize or the claims
