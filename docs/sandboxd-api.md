@@ -63,6 +63,8 @@ they reach its guest, so they share these answers:
 - 503 `sandbox moving to another node; retry` while an
   [evacuation](#post-v1drain) has yet to move it, or while a
   [live move](#post-v1sandboxesidmove) pauses it for its final round
+- 503 `sandbox changed while the call waited; retry` when a
+  [resize](#post-v1sandboxesidresize) replaced the claim while the call waited for it
 - 503 `archive registry down; retry` for an archived claim under
   `archive_failover` while the meta store is down
 - 503 `tenant store down; retry` for an archived claim whose tenant the node has
@@ -550,7 +552,8 @@ Auth: the sandbox's own token, or the root or operator token for cleanup by id.
 Destroys the VM. 204 on success, 404 for an unknown id or wrong token, 500 when
 the VM survives removal: the claim is already gone and the node retries the
 removal, 503 `archive registry down; retry` for a claim that holds a registry
-row while the meta store is down; resend it.
+row while the meta store is down, or, on a node with `archive_failover`, `sandbox changed
+while the call waited; retry` when a [resize](#post-v1sandboxesidresize) ran while the call waited; resend it.
 Releasing an already-gone sandbox is 404 — the SDK treats it as success.
 
 ## POST /v1/sandboxes/{id}/hibernate
@@ -632,7 +635,9 @@ token gets 403, the root or operator token still renews. 400 a malformed body; 4
 bearer token; 403 the claim's tenant was removed; 404 unknown id or wrong
 token; 409 archived, or being archived right now; 503 the archive registry is
 down, for a hibernated claim with a replica under `archive_failover`: the node
-already holds the new lease, and a resend replaces the row; 503 `tenant store
+already holds the new lease, and a resend replaces the row; 503 `sandbox changed while
+the call waited; retry` for such a claim when a [resize](#post-v1sandboxesidresize) ran while the call waited (the
+node holds the new lease); 503 `tenant store
 down; retry` for a tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/fork
@@ -673,7 +678,7 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 (sandbox token); 404 unknown id or wrong sandbox token; 409 egress-lane or volume
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
-429 an [admission refusal](#admission-refusals); 500 when the engine failed the capture or a clone (no child is left, and the call can be sent again); 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
+429 an [admission refusal](#admission-refusals); 500 when the engine failed the capture or a clone (no child is left, and the call can be sent again); 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `sandbox changed while the call waited; retry` when a [resize](#post-v1sandboxesidresize) of the parent ran while the call waited, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -719,7 +724,8 @@ sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 500
 when the capture or the publish to the template store failed (a failed publish
 can still have landed; the call can be sent again, since a promote replaces
 the template of that name), 503
-`lease lost; retry` for a replicated sandbox while its node's lease is overdue.
+`lease lost; retry` for a replicated sandbox while its node's lease is overdue, or
+`sandbox changed while the call waited; retry` when a [resize](#post-v1sandboxesidresize) of the sandbox ran while the call waited.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 
@@ -765,7 +771,8 @@ targets online — no restart, and no live claim's VM is touched. With
 [`meta_store.cell`](deploy.md#shared-pool-set) set, it replaces them on every
 node of the cell. On a node with egress policies,
 whether a key is pooled decides which [policy layers](egress.md) a claim of it
-gets; that is settled when the claim is made, so adding or dropping a pool here
+gets; that is settled when the claim is made (a [resize](#post-v1sandboxesidresize) moves a claim
+to its target pool's layers, except a promoted template's clone), so adding or dropping a pool here
 changes only claims made afterwards — a key that gains a pool with no `egress`
 block leaves new tenant claims without egress, a key that loses such a pool
 gives new tenant claims their egress class's policy alone:
@@ -1003,7 +1010,7 @@ has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL answers 404 —
 no revocation list. A browser request to the minted URL answers 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`; a wake that [hands an archived claim to a peer](cluster.md#waking-an-archived-claim-on-a-full-node) answers 404, as after a move. See [deploy](deploy.md#preview-urls).
+`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, 503 `sandbox changed while the call waited; retry` when a [resize](#post-v1sandboxesidresize) of it ran while the request waited, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`; a wake that [hands an archived claim to a peer](cluster.md#waking-an-archived-claim-on-a-full-node) answers 404, as after a move. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
@@ -1019,7 +1026,8 @@ wakes it first), 429 while the disk is under [`disk_reserve`](deploy.md), 500 wh
 or the publish to the checkpoint store failed (a failed capture leaves no checkpoint; a failed
 publish can still have landed, and a second call makes another checkpoint under a new id, so
 [list](#get-v1checkpoints) before sending it again), 503 `lease lost; retry`
-for a replicated sandbox while its node's lease is overdue.
+for a replicated sandbox while its node's lease is overdue, or `sandbox changed
+while the call waited; retry` when a [resize](#post-v1sandboxesidresize) of the sandbox ran while the call waited.
 
 ## POST /v1/checkpoints/{id}/claim
 
@@ -1110,7 +1118,7 @@ archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_t
 volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?, env_missing?}], "next": "…"}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM or a hibernate snapshot or archive whose guest did not answer a
-[wake](#post-v1sandboxesidwake), and the reboots inside a running guest
+[wake](#post-v1sandboxesidwake), the cold boot of a [resize](#post-v1sandboxesidresize), and the reboots inside a running guest
 ([guest reboots](deploy.md#guest-reboots), at most one per claim every 30 s),
 and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when
@@ -1261,7 +1269,9 @@ deliver it. The guest side is described in [silkd](silkd.md#claim-env).
 field or an `inject` outside the claim's intercepted hosts; 404 unknown id or another tenant's claim; 409 a guest change on a
 paused or failed sandbox; 503 the archive registry is down, for an archived
 claim or a hibernated claim with a replica under `archive_failover`: the node
-already holds the new env, and a resend replaces the row.
+already holds the new env, and a resend replaces the row; 503 `sandbox changed
+while the call waited; retry` for such a hibernated claim when a [resize](#post-v1sandboxesidresize) ran
+while the call waited (the node holds the new env).
 
 ## PUT /v1/sandboxes/{id}/instance-metadata
 
@@ -1315,7 +1325,9 @@ started on its target (retry); 500 the address store failed or the claims
 journal could not be written (nothing changed); 503 the archive registry is
 down for an archived claim or one with a replica under `archive_failover`:
 the node already holds the change, and a resend of the same body replaces the
-row.
+row; 503 `sandbox changed while the call waited; retry` for a hibernated claim
+with a replica when a [resize](#post-v1sandboxesidresize) ran while the call waited (the node holds the
+change).
 
 ## POST /v1/sandboxes/{id}/balloon
 
@@ -1372,7 +1384,7 @@ enters a `tun` pool holds none until
 does when it builds a VM (the image, the warmup, the cell CA an intercepting
 pool bakes) is applied again. A resize
 to the claim's own size is accepted: it grows the disk to the pool's
-`storage` and cold-boots the claim.
+`storage` when that is above the disk's size, and cold-boots the claim.
 
 sandboxd sets the VM's vCPUs and memory through `cocoon vm resize`, which
 needs cocoon v0.8.1 or newer. When the target pool's `storage` is above the
@@ -1384,12 +1396,16 @@ again, and the instance-metadata document is the caller's to send again. A
 claim past its lease that archives at expiry in the pool it leaves starts a
 fresh lease, as a [wake](#post-v1sandboxesidwake) gives. The usage journal records `resize` with
 the new shape when the claim takes the key, and `vmm_restart` when the boot
-starts.
+starts. The request stays open while cocoon works: `cocoon vm resize` has 15
+minutes, and 11 more after sandboxd cancels it, since cocoon lets `e2fsck` and
+`resize2fs` finish. Once sandboxd has called cocoon, a client that disconnects
+does not stop the resize.
 
 Only a hibernated claim resizes; hibernate a running one first, and wake an
 archived one and hibernate it again. Until the claim takes the new key, a
-failure changes nothing sandboxd holds: the claim stays hibernated at its old
-size, a wake restores the snapshot and its size, and the same resize can be
+failure changes nothing sandboxd holds, though cocoon's record of the VM can
+already hold the new size: the claim stays hibernated at its old
+size, a wake restores the snapshot with its size and disk, and the same resize can be
 sent again. Once it has taken the key, the old memory image can no longer
 run: a cold boot that fails answers 500, and the claim is then one whose VMM
 is down, restarted or failed by the rows of
@@ -1403,9 +1419,12 @@ carries that shape; wake it, hibernate it and send the resize again.
 204 on success; 400 an unknown `size` or an unknown field; 404 unknown id;
 409 `sandbox cannot resize` with the reason: the claim is not hibernated
 (running, archived or failed), the node has no pool of its template and lane
-at that size, its VM record is gone, it has volumes, or cocoon is below v0.8.1; 429 when `max_running` or `disk_reserve` refuses the boot;
-503 `sandbox moving to another node; retry` on a node that is evacuating or
-starts to while the VM resizes (the claim stays hibernated at its old size and moves), or
+at that size, the resize would leave an inject host of its env not intercepted or with a header a pool secret already sets, its VM record is gone, it has volumes, or cocoon is below v0.8.1 (sandboxd
+reads cocoon's version once, so a cocoon upgraded in place takes a sandboxd restart); 429 when `max_running` or `disk_reserve` refuses the boot;
+503 `sandbox moving to another node; retry` while a [live move](#post-v1sandboxesidmove)
+holds the claim, running or not, or on a node that is evacuating or
+starts to while the VM resizes (the claim stays hibernated at its old size and moves),
+`sandbox changed while the call waited; retry` when another resize of the claim ran first, or
 `lease lost; retry` for a replicated claim whose node's lease is overdue at the start or when the claim would take the key; 500 cocoon refused or failed the resize or the claims
 journal could not be written (the claim stays hibernated at its old size), or
 the cold boot failed after the claim took the new key.
@@ -1440,7 +1459,9 @@ its final round; 500 the claims journal could not be written (nothing
 changed) or the claim's row could not be rewritten (the node holds the change;
 resend the same body); 503 the archive registry is down for an archived claim
 or a hibernated one with a replica under `archive_failover`: the node already
-holds the change, and a resend of the same body replaces the row.
+holds the change, and a resend of the same body replaces the row; 503 `sandbox
+changed while the call waited; retry` for such a hibernated claim when a
+[resize](#post-v1sandboxesidresize) ran while the call waited (the node holds the change).
 
 ## GET /metrics
 
@@ -1703,7 +1724,10 @@ lease expired, or whose owner released it in an
 down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining or fenced
 node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404; a cordoned one adopts. A node whose
 lease is overdue answers 404 for the replicated claims it holds, so the
-`Lookup` scatter moves on. With `client_advertise` configured,
+`Lookup` scatter moves on. The adopter gives the claim the key its checkpoint
+was taken at, which can differ from the row's after a [resize](#post-v1sandboxesidresize)
+that no later replica followed; a row whose checkpoint has no record, or one that
+does not parse, answers 404 `unknown checkpoint`, and a store read failure 500. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
 to claim and fork responses. Used by the SDK's `Lookup` scatter. A claim the root or the operator
 adopted keeps the row's token hash in place of its token: its own token still
