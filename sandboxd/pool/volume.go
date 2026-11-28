@@ -195,11 +195,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	mount := m.eng.MountVolume
-	if live {
-		mount = m.eng.MountLiveVolume
-	}
-	if err := mount(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
+	if err := m.eng.MountVolume(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW, live); err != nil {
 		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, withCtxErr(ctx, err))
 	}
 	return nil

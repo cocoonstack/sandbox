@@ -180,8 +180,7 @@ type Engine interface {
 	CheckLiveVolumeSupport(ctx context.Context) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
 	DetachVolume(ctx context.Context, vmName, sock, name, mount string) (cleanRW bool, err error)
-	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
-	MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
+	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw, live bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) (bool, error)
 	SyncGuest(ctx context.Context, vsockSocket string) error
 	DiskAttachSnapshot(ctx context.Context, vmName, snapName string) (string, error)

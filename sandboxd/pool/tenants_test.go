@@ -281,7 +281,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if _, d := eval.Eval("a.test", "GET", 443); d == egress.DecisionAllow {
 		t.Error("a host outside the class is allowed")
 	}
-	client := outboundtest.EgressClient(engine.EgressSocketPath(classed.VsockSocket))
+	client := outboundtest.EgressClient(engine.DoorPath(classed.VsockSocket, engine.EgressPort))
 	status := func(host string) int {
 		t.Helper()
 		resp, getErr := client.Get("http://" + host + "/")

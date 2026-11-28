@@ -23,7 +23,7 @@ func TestTheBootDoorOfAPolicylessClaimHandsANoticeOnAndAcks(t *testing.T) {
 	})
 	sb := outboundtest.VsockSandbox(t, "sb_boot", testKey)
 	sb.VMName = "sbx-boot"
-	path := engine.BootSocketPath(sb.VsockSocket)
+	path := engine.DoorPath(sb.VsockSocket, engine.BootPort)
 
 	h.Prebind(t.Context(), sb)
 	if _, err := os.Stat(path); err != nil || prebootCount(h) != 1 {
@@ -76,7 +76,7 @@ func TestARearmReplacesTheBootDoorAndClosePreboundDropsAnUnclaimedOne(t *testing
 			t.Fatalf("arm proxy: %v", err)
 		}
 	}
-	if ack := sendBootNotice(t, engine.BootSocketPath(sb.VsockSocket), "0f6a3c1e-2b4d-4e8f-9a7c-5d3e1b2a4c6f\n"); ack != "\n" || <-notices != "0f6a3c1e-2b4d-4e8f-9a7c-5d3e1b2a4c6f" {
+	if ack := sendBootNotice(t, engine.DoorPath(sb.VsockSocket, engine.BootPort), "0f6a3c1e-2b4d-4e8f-9a7c-5d3e1b2a4c6f\n"); ack != "\n" || <-notices != "0f6a3c1e-2b4d-4e8f-9a7c-5d3e1b2a4c6f" {
 		t.Errorf("ack %q after a re-arm, want the notice taken", ack)
 	}
 
@@ -84,7 +84,7 @@ func TestARearmReplacesTheBootDoorAndClosePreboundDropsAnUnclaimedOne(t *testing
 	warm.VMName = "sbx-warm"
 	h.Prebind(t.Context(), warm)
 	h.ClosePrebound(warm.VMName)
-	if _, err := os.Stat(engine.BootSocketPath(warm.VsockSocket)); !errors.Is(err, fs.ErrNotExist) || prebootCount(h) != 0 {
+	if _, err := os.Stat(engine.DoorPath(warm.VsockSocket, engine.BootPort)); !errors.Is(err, fs.ErrNotExist) || prebootCount(h) != 0 {
 		t.Errorf("prebound boot doors %d, stat %v, want the unclaimed door closed and unlinked", prebootCount(h), err)
 	}
 }
@@ -99,7 +99,7 @@ func TestTheBootDoorPacesTheNoticesItHandsOn(t *testing.T) {
 	if err := h.ArmProxy(t.Context(), sb); err != nil {
 		t.Fatalf("arm proxy: %v", err)
 	}
-	path := engine.BootSocketPath(sb.VsockSocket)
+	path := engine.DoorPath(sb.VsockSocket, engine.BootPort)
 
 	sendBootNotice(t, path, "5f1c0e2a-77b1-4c43-9d2e-0a1b2c3d4e5f\n")
 	sendBootNotice(t, path, "0f6a3c1e-2b4d-4e8f-9a7c-5d3e1b2a4c6f\n")
@@ -113,7 +113,7 @@ func TestTheBootDoorPacesTheNoticesItHandsOn(t *testing.T) {
 func TestABootDoorDisarmedWhileItBindsIsClosedNotPublished(t *testing.T) {
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, nil), nil)
 	sb := outboundtest.VsockSandbox(t, "sb_boot_race", testKey)
-	path := engine.BootSocketPath(sb.VsockSocket)
+	path := engine.DoorPath(sb.VsockSocket, engine.BootPort)
 
 	if err := h.armProxy(t.Context(), sb, func(path string) (*net.UnixListener, error) {
 		ln, err := listenUnix(path)

@@ -56,13 +56,19 @@ func (e *Engine) DiskAttachDir(ctx context.Context, vmName, dir string) (string,
 	return e.diskAttachCopy(ctx, vmName, "--from-dir", dir)
 }
 
-// MountVolume discovers and mounts a hot-attached disk at mount, read-only unless rw.
-func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error {
+// MountVolume discovers and mounts a hot-attached disk at mount, read-only unless rw; live keeps an identical existing mount.
+func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount string, rw, live bool) error {
 	ctx, cancel := context.WithTimeout(ctx, volumeSetupTimeout)
 	defer cancel()
 	device, err := e.waitForVolumeDevice(ctx, vsockSocket, name)
 	if err != nil {
 		return fmt.Errorf("wait for volume device %s: %w", name, err)
+	}
+	if live {
+		mounted, err := e.volumeMounted(ctx, vsockSocket, device, mount, rw)
+		if err != nil || mounted {
+			return err
+		}
 	}
 	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
 }

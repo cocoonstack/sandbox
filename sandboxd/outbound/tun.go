@@ -105,7 +105,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		return
 	}
 	logger := log.WithFunc("outbound.armTun")
-	ln, err := listenUnix(engine.TunSocketPath(sock))
+	ln, err := listenUnix(engine.DoorPath(sock, engine.TunPort))
 	if err != nil {
 		logger.Warnf(ctx, "bind the packet door of %s, it runs without tun: %v", id, err)
 		return

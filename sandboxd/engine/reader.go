@@ -34,13 +34,13 @@ func (e *Engine) StartReader(ctx context.Context, vsockSocket, cowDisk string) e
 		return fmt.Errorf("guest cmdline names no %s", layersParam)
 	}
 	cow := readerRoot + "/cow"
-	if err = e.MountVolume(ctx, vsockSocket, cowDisk, cow, true); err != nil {
+	if err = e.MountVolume(ctx, vsockSocket, cowDisk, cow, true, false); err != nil {
 		return fmt.Errorf("mount claim disk: %w", err)
 	}
 	lower := []string{cow + "/upper"}
 	for i, layer := range layers {
 		mount := fmt.Sprintf("%s/layer%d", readerRoot, i)
-		if err = e.MountVolume(ctx, vsockSocket, layer, mount, false); err != nil {
+		if err = e.MountVolume(ctx, vsockSocket, layer, mount, false, false); err != nil {
 			return fmt.Errorf("mount layer %d: %w", i, err)
 		}
 		lower = append(lower, mount)

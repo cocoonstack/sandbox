@@ -144,18 +144,14 @@ func (s *Store) Unconfirmed(ctx context.Context, age time.Duration) (map[string]
 	if err != nil {
 		return nil, down(err)
 	}
-	defer rows.Close()
 	stale := map[string]netip.Addr{}
-	for rows.Next() {
-		var claim, addr string
-		if err := rows.Scan(&claim, &addr); err != nil {
-			return nil, down(err)
-		}
+	var claim, addr string
+	if _, err = pgx.ForEachRow(rows, []any{&claim, &addr}, func() error {
 		if a, parseErr := netip.ParseAddr(addr); parseErr == nil {
 			stale[claim] = a
 		}
-	}
-	if err := rows.Err(); err != nil {
+		return nil
+	}); err != nil {
 		return nil, down(err)
 	}
 	return stale, nil

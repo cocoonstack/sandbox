@@ -42,21 +42,6 @@ func (e *Engine) CheckLiveVolumeSupport(ctx context.Context) error {
 	return nil
 }
 
-// MountLiveVolume mounts an attached disk unless the same mount already exists.
-func (e *Engine) MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error {
-	ctx, cancel := context.WithTimeout(ctx, volumeSetupTimeout)
-	defer cancel()
-	device, err := e.waitForVolumeDevice(ctx, vsockSocket, name)
-	if err != nil {
-		return fmt.Errorf("wait for volume device %s: %w", name, err)
-	}
-	mounted, err := e.volumeMounted(ctx, vsockSocket, device, mount, rw)
-	if err != nil || mounted {
-		return err
-	}
-	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
-}
-
 // DetachVolume unmounts and detaches a guest volume; true means a writable mount closed cleanly.
 func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mount string) (bool, error) {
 	device, found, err := e.findVolumeDevice(ctx, vsockSocket, name, map[string]bool{})

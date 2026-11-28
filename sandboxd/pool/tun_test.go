@@ -529,7 +529,7 @@ func tunManager(t *testing.T, eng *fakeEngine, addrs tunnet.Addresses, pools ...
 
 func tunHello(t *testing.T, sb *types.Sandbox) bool {
 	t.Helper()
-	conn, err := net.Dial("unix", engine.TunSocketPath(sb.VsockSocket))
+	conn, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.TunPort))
 	if err != nil {
 		return false
 	}
@@ -539,7 +539,7 @@ func tunHello(t *testing.T, sb *types.Sandbox) bool {
 
 func openStream(t *testing.T, sb *types.Sandbox) net.Conn {
 	t.Helper()
-	conn, err := net.Dial("unix", engine.TunSocketPath(sb.VsockSocket))
+	conn, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.TunPort))
 	if err != nil {
 		t.Fatalf("dial the packet door: %v", err)
 	}
@@ -566,7 +566,7 @@ func helloOn(t *testing.T, conn net.Conn) bool {
 }
 
 func doorOpen(sb *types.Sandbox) bool {
-	conn, err := net.Dial("unix", engine.TunSocketPath(sb.VsockSocket))
+	conn, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.TunPort))
 	if err != nil {
 		return false
 	}

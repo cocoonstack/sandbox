@@ -155,7 +155,7 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	go func() {
-		resp, err := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket)).Get(origin.URL + "/")
+		resp, err := outboundtest.EgressClient(engine.DoorPath(sb.VsockSocket, engine.EgressPort)).Get(origin.URL + "/")
 		if err == nil {
 			resp.Body.Close()
 		}

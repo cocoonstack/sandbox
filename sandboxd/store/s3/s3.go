@@ -293,7 +293,10 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	}
 	drop := []string{s.key(id, store.LabelsFile)}
 	for _, obj := range objs {
-		man, readErr := s.manifestAt(ctx, *obj.Key)
+		man, readErr := s.readManifest(ctx, *obj.Key)
+		if errors.Is(readErr, store.ErrNotFound) {
+			continue
+		}
 		if readErr != nil {
 			return readErr
 		}
@@ -351,17 +354,17 @@ func (s *Store) currentManifest(ctx context.Context, id string) (manifest, error
 	if err != nil {
 		return manifest{}, err
 	}
-	return s.readManifest(ctx, id, store.ExportGen(meta))
+	return s.readManifest(ctx, s.manifestKey(id, store.ExportGen(meta)))
 }
 
-func (s *Store) readManifest(ctx context.Context, id, gen string) (manifest, error) {
-	raw, _, err := s.getObject(ctx, s.manifestKey(id, gen))
+func (s *Store) readManifest(ctx context.Context, key string) (manifest, error) {
+	raw, _, err := s.getObject(ctx, key)
 	if err != nil {
 		return manifest{}, err
 	}
 	var man manifest
 	if err := json.Unmarshal(raw, &man); err != nil {
-		return manifest{}, fmt.Errorf("decode manifest of %s/%s: %w", id, gen, err)
+		return manifest{}, fmt.Errorf("decode manifest %s: %w", key, err)
 	}
 	return man, nil
 }
@@ -500,7 +503,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 	}
 	defer func() { _ = os.RemoveAll(local) }()
 	exportGen := store.ExportGen(meta)
-	man, err := s.readManifest(ctx, id, exportGen)
+	man, err := s.readManifest(ctx, s.manifestKey(id, exportGen))
 	if err != nil {
 		return err
 	}
@@ -649,21 +652,6 @@ func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[s
 		return nil, err
 	}
 	return have, nil
-}
-
-func (s *Store) manifestAt(ctx context.Context, key string) (manifest, error) {
-	body, _, err := s.getObject(ctx, key)
-	if errors.Is(err, store.ErrNotFound) {
-		return manifest{}, nil
-	}
-	if err != nil {
-		return manifest{}, err
-	}
-	var man manifest
-	if err = json.Unmarshal(body, &man); err != nil {
-		return manifest{}, fmt.Errorf("decode manifest %s: %w", key, err)
-	}
-	return man, nil
 }
 
 func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata map[string]string) error {
