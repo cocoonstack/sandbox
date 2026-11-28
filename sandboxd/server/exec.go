@@ -1,7 +1,6 @@
 package server
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -138,27 +137,7 @@ func (s *Server) killExec(ctx context.Context, id string, cred pool.Cred, pid ui
 		return err
 	}
 	defer done()
-	guest, err := s.dialer.DialSilkd(ctx, sock)
-	if err != nil {
-		return err
-	}
-	defer closeOnCancel(ctx, guest)()
-	frame, _ := wire.EncodeRequest(wire.Kill{PID: pid})
-	if _, err = guest.Write(append(frame, '\n')); err != nil {
-		return err
-	}
-	sc := wire.NewFrameScanner(guest)
-	if !sc.Scan() {
-		return cmp.Or(sc.Err(), io.ErrUnexpectedEOF)
-	}
-	reply, err := wire.DecodeResponse(sc.Bytes())
-	if err != nil {
-		return err
-	}
-	if silkdErr, ok := reply.(*wire.ErrorResp); ok && silkdErr.Kind != wire.KindNotFound {
-		return silkdErr
-	}
-	return nil
+	return s.dialer.KillSilkd(ctx, sock, pid)
 }
 
 func collectExec(guest net.Conn, reserve func(int) bool) (resp ExecResponse, pid uint32, err error) {

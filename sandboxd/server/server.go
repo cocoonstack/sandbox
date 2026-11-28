@@ -176,6 +176,7 @@ type Manager interface {
 // Dialer opens the hybrid-vsock connection to a VM's silkd.
 type Dialer interface {
 	DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, error)
+	KillSilkd(ctx context.Context, vsockSocket string, pid uint32) error
 }
 
 // Placer names peers for redirect placement and lists the mesh; nil on a single-node deployment.

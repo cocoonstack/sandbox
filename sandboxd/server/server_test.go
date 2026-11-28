@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
@@ -3182,6 +3184,30 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 		return c, nil
 	}
 	return f.dial(ctx, sock)
+}
+
+func (f *fakeDialer) KillSilkd(ctx context.Context, sock string, pid uint32) error {
+	guest, err := f.DialSilkd(ctx, sock)
+	if err != nil {
+		return err
+	}
+	defer closeOnCancel(ctx, guest)()
+	frame, _ := wire.EncodeRequest(wire.Kill{PID: pid})
+	if _, err = guest.Write(append(frame, '\n')); err != nil {
+		return err
+	}
+	sc := wire.NewFrameScanner(guest)
+	if !sc.Scan() {
+		return cmp.Or(sc.Err(), io.ErrUnexpectedEOF)
+	}
+	reply, err := wire.DecodeResponse(sc.Bytes())
+	if err != nil {
+		return err
+	}
+	if silkdErr, ok := reply.(*wire.ErrorResp); ok && silkdErr.Kind != wire.KindNotFound {
+		return silkdErr
+	}
+	return nil
 }
 
 type fakePlacer struct {

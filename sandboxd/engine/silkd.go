@@ -63,6 +63,14 @@ func (s *silkdSession) close() {
 	_ = s.conn.Close()
 }
 
+func (e *Engine) KillSilkd(ctx context.Context, vsockSocket string, pid uint32) error {
+	err := e.silkdOnce[*wire.Done](ctx, vsockSocket, wire.Kill{PID: pid})
+	if resp, ok := errors.AsType[*wire.ErrorResp](err); ok && resp.Kind == wire.KindNotFound {
+		return nil
+	}
+	return err
+}
+
 func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*silkdSession, error) {
 	conn, err := e.DialSilkd(ctx, vsockSocket)
 	if err != nil {
