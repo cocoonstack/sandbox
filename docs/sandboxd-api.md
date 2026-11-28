@@ -677,7 +677,7 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 (sandbox token); 404 unknown id or wrong sandbox token; 409 egress-lane or volume
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
-429 an [admission refusal](#admission-refusals); 500 when the engine failed the capture or a clone (no child is left, and the call can be sent again); 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `sandbox changed while the call waited; retry` after a [resize](#post-v1sandboxesidresize) of the parent, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
+429 an [admission refusal](#admission-refusals); 500 when the engine failed the capture or a clone (no child is left, and the call can be sent again); 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `sandbox changed while the call waited; retry` when a [resize](#post-v1sandboxesidresize) of the parent ran while the call waited, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -724,7 +724,7 @@ when the capture or the publish to the template store failed (a failed publish
 can still have landed; the call can be sent again, since a promote replaces
 the template of that name), 503
 `lease lost; retry` for a replicated sandbox while its node's lease is overdue, or
-`sandbox changed while the call waited; retry` after a [resize](#post-v1sandboxesidresize) of the sandbox.
+`sandbox changed while the call waited; retry` when a [resize](#post-v1sandboxesidresize) of the sandbox ran while the call waited.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 
@@ -771,7 +771,7 @@ targets online — no restart, and no live claim's VM is touched. With
 node of the cell. On a node with egress policies,
 whether a key is pooled decides which [policy layers](egress.md) a claim of it
 gets; that is settled when the claim is made (a [resize](#post-v1sandboxesidresize) moves a claim
-to its target pool's layers), so adding or dropping a pool here
+to its target pool's layers, except a promoted template's clone), so adding or dropping a pool here
 changes only claims made afterwards — a key that gains a pool with no `egress`
 block leaves new tenant claims without egress, a key that loses such a pool
 gives new tenant claims their egress class's policy alone:
@@ -1009,7 +1009,7 @@ has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL answers 404 —
 no revocation list. A browser request to the minted URL answers 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, 503 `sandbox changed while the call waited; retry` after a [resize](#post-v1sandboxesidresize) of it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`; a wake that [hands an archived claim to a peer](cluster.md#waking-an-archived-claim-on-a-full-node) answers 404, as after a move. See [deploy](deploy.md#preview-urls).
+`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, 503 `sandbox changed while the call waited; retry` when a [resize](#post-v1sandboxesidresize) of it ran while the request waited, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`; a wake that [hands an archived claim to a peer](cluster.md#waking-an-archived-claim-on-a-full-node) answers 404, as after a move. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
@@ -1026,7 +1026,7 @@ or the publish to the checkpoint store failed (a failed capture leaves no checkp
 publish can still have landed, and a second call makes another checkpoint under a new id, so
 [list](#get-v1checkpoints) before sending it again), 503 `lease lost; retry`
 for a replicated sandbox while its node's lease is overdue, or `sandbox changed
-while the call waited; retry` after a [resize](#post-v1sandboxesidresize) of the sandbox.
+while the call waited; retry` when a [resize](#post-v1sandboxesidresize) of the sandbox ran while the call waited.
 
 ## POST /v1/checkpoints/{id}/claim
 
@@ -1725,8 +1725,8 @@ node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404;
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. The adopter gives the claim the key its checkpoint
 was taken at, which can differ from the row's after a [resize](#post-v1sandboxesidresize)
-that no later replica followed; a row whose checkpoint has no record answers
-404 `unknown checkpoint`, and one whose record cannot be read 500. With `client_advertise` configured,
+that no later replica followed; a row whose checkpoint has no record, or one that
+does not parse, answers 404 `unknown checkpoint`, and a store read failure 500. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
 to claim and fork responses. Used by the SDK's `Lookup` scatter. A claim the root or the operator
 adopted keeps the row's token hash in place of its token: its own token still
