@@ -295,6 +295,34 @@ func TestAResizeIsRefusedWhenThePoolLayerItTakesDropsAnInjectHost(t *testing.T) 
 	}
 }
 
+func TestAResizeRechecksAnInjectEntryWrittenWhileCocoonResized(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = outboundtest.SockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()}, config.PoolSpec{PoolKey: xlargeKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	hibernateClaim(t, m, sb)
+	var patchErr error
+	eng.resizeHook = func() {
+		patchErr = m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Api-Key", "api.github.com"), "")
+	}
+
+	err = m.Resize(t.Context(), sb.ID, types.SizeXLarge)
+
+	if patchErr != nil {
+		t.Fatalf("patch during the resize: %v, want it admitted under the small pool's policy", patchErr)
+	}
+	if !errors.Is(err, ErrNotResizable) || !strings.Contains(err.Error(), "KEY: api.github.com is not intercepted") {
+		t.Errorf("resize = %v, want ErrNotResizable naming the inject written while cocoon resized", err)
+	}
+	assertUnresized(t, m, eng, sb)
+	if got := credentialsFor(sb, "api.github.com"); got != "KEY:X-Api-Key=k" {
+		t.Errorf("credentials %q, want the patched inject kept under the small pool", got)
+	}
+}
+
 func TestCallsThatMeetAResizeNeverRestoreTheOldMemoryImage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newResizeManager(t, eng, "")

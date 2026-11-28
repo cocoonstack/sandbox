@@ -44,14 +44,7 @@ func (m *Manager) Resize(ctx context.Context, id string, size types.Size) error 
 	_, pooled := m.activePool(key)
 	live, volumes := m.claimed[id] == sb, m.hasVolumeHolds(sb)
 	hibernated := sb.HibernateSnap != "" && sb.ArchiveCk == "" && sb.Failed == ""
-	var gap []string
-	if sb.Env.HasInject() {
-		probe := &types.Sandbox{Key: key, PolicySource: sb.PolicySource, Layer: sb.Layer, Tenant: sb.Tenant, EgressClass: sb.EgressClass, NoEgress: sb.NoEgress}
-		takePoolLayer(probe)
-		out := m.view.Load().out
-		had := out.InjectGap(sb, sb.Env)
-		gap = slices.DeleteFunc(out.InjectGap(probe, sb.Env), func(g string) bool { return slices.Contains(had, g) })
-	}
+	gapErr := m.injectGapErrLocked(sb, key)
 	m.mu.Unlock()
 	switch {
 	case !live:
@@ -60,8 +53,8 @@ func (m *Manager) Resize(ctx context.Context, id string, size types.Size) error 
 		return fmt.Errorf("%w: it is not hibernated", ErrNotResizable)
 	case !pooled:
 		return fmt.Errorf("%w: this node has no %s pool of its template and lane", ErrNotResizable, size)
-	case len(gap) > 0:
-		return fmt.Errorf("%w: inject %s", ErrNotResizable, strings.Join(gap, ", "))
+	case gapErr != nil:
+		return gapErr
 	}
 	rec, found, err := m.eng.Inspect(ctx, sb.VMName)
 	if err != nil {
@@ -103,6 +96,7 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 	m.mu.Lock()
 	sb.Waking = false
 	m.store.recount(sb)
+	gapErr := m.injectGapErrLocked(sb, key)
 	switch {
 	case m.claimed[sb.ID] != sb:
 		m.mu.Unlock()
@@ -113,6 +107,9 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 	case sb.Replicated && m.isFenced():
 		m.mu.Unlock()
 		return nil, "", ErrLeaseLost
+	case gapErr != nil:
+		m.mu.Unlock()
+		return nil, "", gapErr
 	}
 	snap, readerSafe, deadline := sb.HibernateSnap, sb.ReaderSafe, sb.Deadline
 	sb.HibernateSnap, sb.ReaderSafe = "", false
@@ -160,6 +157,21 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 	}
 	m.recordUsage(ctx, ev)
 	return next, snap, nil
+}
+
+func (m *Manager) injectGapErrLocked(sb *types.Sandbox, key types.PoolKey) error {
+	if !sb.Env.HasInject() {
+		return nil
+	}
+	probe := &types.Sandbox{Key: key, PolicySource: sb.PolicySource, Layer: sb.Layer, Tenant: sb.Tenant, EgressClass: sb.EgressClass, NoEgress: sb.NoEgress}
+	takePoolLayer(probe)
+	out := m.view.Load().out
+	had := out.InjectGap(sb, sb.Env)
+	gap := slices.DeleteFunc(out.InjectGap(probe, sb.Env), func(g string) bool { return slices.Contains(had, g) })
+	if len(gap) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: inject %s", ErrNotResizable, strings.Join(gap, ", "))
 }
 
 // growTo is the pool's storage when it is above the disk's size; a disk only grows, and cocoon refuses a smaller one.
