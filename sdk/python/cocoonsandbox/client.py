@@ -99,6 +99,8 @@ class Client(_Closeable):
         except APIError as exc:
             if exc.status >= 500:
                 raise
+            if peers_err is not None and peers_err.status >= 500:
+                raise peers_err from None
             reason = f"no owner found for {id}" if peers_err is None else f"no owner found for {id}; {peers_err}"
             raise APIError("lookup", 404, reason) from None
 

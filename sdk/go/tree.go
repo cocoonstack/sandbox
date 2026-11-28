@@ -9,8 +9,7 @@ import (
 
 // Push extracts a tar stream under dest in the sandbox, the no-network lane's way to move a project in.
 func (s *Sandbox) Push(ctx context.Context, dest string, tarStream io.Reader) error {
-	err := s.uploadRPC(ctx, &wire.FsPush{Dest: dest}, tarStream)
-	s.rebind(ctx, err)
+	_, err := s.rebind(ctx, s.uploadRPC(ctx, &wire.FsPush{Dest: dest}, tarStream))
 	return err
 }
 

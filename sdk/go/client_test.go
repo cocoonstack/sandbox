@@ -214,7 +214,7 @@ func TestARebindThatLosesTheRaceToAnotherCallStillRetries(t *testing.T) {
 		}
 	})
 	sb = &Sandbox{ID: "sb_9", c: testClient(t, adopter), token: "tok9", owner: "127.0.0.1:1"}
-	if !sb.rebind(t.Context(), &ownerGoneError{err: errors.New("refused"), id: "sb_9", addr: "127.0.0.1:1"}) {
+	if moved, _ := sb.rebind(t.Context(), &ownerGoneError{err: errors.New("refused"), id: "sb_9", addr: "127.0.0.1:1"}); !moved {
 		t.Error("a call that failed at the old owner was not retried after another call rebound the handle")
 	}
 }
@@ -320,10 +320,10 @@ func TestAnotherSandboxsErrorInAWriterIsNotReplayed(t *testing.T) {
 func TestACallThatLostARaceToAMoveRetriesAtTheOwnerFound(t *testing.T) {
 	entry := serveFunc(t, http.NotFound)
 	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: "new:7777"}
-	if !sb.rebind(t.Context(), &ownerGoneError{err: errors.New("gone"), id: "sb_1", addr: "old:7777"}) {
+	if moved, _ := sb.rebind(t.Context(), &ownerGoneError{err: errors.New("gone"), id: "sb_1", addr: "old:7777"}); !moved {
 		t.Error("a call tagged by the old owner did not retry at the owner another call found")
 	}
-	if sb.rebind(t.Context(), &ownerGoneError{err: errors.New("gone"), id: "sb_2", addr: "old:7777"}) {
+	if moved, _ := sb.rebind(t.Context(), &ownerGoneError{err: errors.New("gone"), id: "sb_2", addr: "old:7777"}); moved {
 		t.Error("another sandbox's tag rebound this handle")
 	}
 }
@@ -698,6 +698,26 @@ func TestLookupReturnsANodeErrorInsteadOfNoOwner(t *testing.T) {
 	}
 }
 
+func TestCloseReportsAPeerThatCouldNotAnswerTheLookup(t *testing.T) {
+	err := goneSandbox(t, http.StatusServiceUnavailable).Close()
+	if he, ok := errors.AsType[*APIError](err); !ok || he.Status != http.StatusServiceUnavailable {
+		t.Fatalf("Close: %v, want the peer's 503", err)
+	}
+}
+
+func TestCloseOfASandboxNoPeerHoldsIsNotAnError(t *testing.T) {
+	if err := goneSandbox(t, http.StatusNotFound).Close(); err != nil {
+		t.Fatalf("Close: %v, want nil for a sandbox no node holds", err)
+	}
+}
+
+func TestACallReportsAPeerThatCouldNotAnswerTheLookup(t *testing.T) {
+	_, err := goneSandbox(t, http.StatusServiceUnavailable).Stat(t.Context(), "/")
+	if he, ok := errors.AsType[*APIError](err); !ok || he.Status != http.StatusServiceUnavailable {
+		t.Fatalf("stat: %v, want the peer's 503 instead of the old owner's 404", err)
+	}
+}
+
 func TestAPIErrorDrainsOversizedBody(t *testing.T) {
 	body := strings.NewReader(`{"error":"` + strings.Repeat("x", 3*4096) + `"}`)
 	err := apiError("claim", &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(body)})
@@ -740,6 +760,19 @@ func movedSandbox(t *testing.T) (*Sandbox, string) {
 	})
 	sb := testSandbox(t, old)
 	return sb, addrOf(adopter)
+}
+
+func goneSandbox(t *testing.T, peerStatus int) *Sandbox {
+	t.Helper()
+	peer := statusServer(t, peerStatus, nil)
+	old := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/peers" {
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(peer)}})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	return testSandbox(t, old)
 }
 
 func retiredAddr(t *testing.T) string {

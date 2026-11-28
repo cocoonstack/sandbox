@@ -7,7 +7,7 @@ import threading
 
 import cocoonsandbox.client
 import pytest
-from cocoonsandbox import APIError, Client
+from cocoonsandbox import APIError, Client, Sandbox
 from conftest import bounded
 
 ENTRY_POINTS = pytest.mark.parametrize(
@@ -319,6 +319,40 @@ def test_close_of_a_sandbox_no_node_holds_is_not_an_error(spawn_node):
         }
     )
     Client(gone).attach(gone, "sb_1", "tok").close()
+
+
+def test_close_raises_a_peer_error_instead_of_already_gone(spawn_node):
+    with pytest.raises(APIError) as exc:
+        gone_sandbox(spawn_node, 503).close()
+    assert exc.value.status == 503, exc.value
+
+
+def test_close_of_a_sandbox_no_peer_holds_is_not_an_error(spawn_node):
+    gone_sandbox(spawn_node, 404).close()
+
+
+def test_lookup_raises_a_failed_peer_discovery_instead_of_no_owner(spawn_node):
+    entry = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
+            ("GET", "/v1/peers"): lambda body, path: (503, {"error": "gossip not ready"}),
+        }
+    )
+    with pytest.raises(APIError) as exc:
+        Client(entry).lookup("sb_1", "tok")
+    assert exc.value.status == 503 and exc.value.verb == "peers", exc.value
+
+
+def test_a_call_raises_a_peer_error_instead_of_the_old_owners_404(spawn_node):
+    with pytest.raises(APIError) as exc:
+        gone_sandbox(spawn_node, 503).stat("/")
+    assert exc.value.status == 503, exc.value
+
+
+def gone_sandbox(spawn_node, peer_status: int) -> Sandbox:
+    peer = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (peer_status, {"error": "not ready"})})
+    old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [peer]})})
+    return Client(old).attach(old, "sb_1", "tok")
 
 
 def drop_reply(server: socket.socket) -> None:

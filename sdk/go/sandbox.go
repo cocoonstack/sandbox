@@ -138,7 +138,8 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 		return 0, errors.New("empty argv")
 	}
 	code, err := s.run(ctx, cmd)
-	if s.rebind(ctx, err) && cmd.Stdin == nil {
+	moved, err := s.rebind(ctx, err)
+	if moved && cmd.Stdin == nil {
 		return s.run(ctx, cmd)
 	}
 	return code, err
@@ -193,6 +194,9 @@ func (s *Sandbox) Close() error {
 		return err
 	}
 	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
+	if err == nil && nodeFault(lookupErr) {
+		return lookupErr
+	}
 	if lookupErr != nil {
 		return err
 	}
@@ -262,20 +266,23 @@ func (s *Sandbox) releaseAt(ctx context.Context, addr string) (found bool, err e
 }
 
 // rebind follows a moved sandbox: a tagged owner error asks Lookup, and a different owner replaces it and its parked connections.
-func (s *Sandbox) rebind(ctx context.Context, err error) bool {
+func (s *Sandbox) rebind(ctx context.Context, err error) (bool, error) {
 	if _, caller := errors.AsType[*callerError](err); caller {
-		return false
+		return false, err
 	}
 	g, gone := errors.AsType[*ownerGoneError](err)
 	if !gone || g.id != s.ID {
-		return false
+		return false, err
 	}
 	if g.addr != s.Owner() {
-		return true
+		return true, err
 	}
 	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
+	if nodeFault(lookupErr) {
+		return false, lookupErr
+	}
 	if lookupErr != nil {
-		return false
+		return false, err
 	}
 	s.mu.Lock()
 	rebound := moved.owner != s.owner
@@ -284,13 +291,13 @@ func (s *Sandbox) rebind(ctx context.Context, err error) bool {
 	if rebound {
 		s.pool.drain()
 	}
-	return moved.owner != g.addr
+	return moved.owner != g.addr, err
 }
 
 // retryMoved runs rpc once more on the new owner when nothing of it reached the old one; rpc's request must be its whole input.
 func (s *Sandbox) retryMoved(ctx context.Context, rpc func() error) error {
-	err := rpc()
-	if s.rebind(ctx, err) {
+	moved, err := s.rebind(ctx, rpc())
+	if moved {
 		return rpc()
 	}
 	return err
@@ -372,4 +379,9 @@ func pumpStdin(conn *silkd.Conn, r io.Reader, readErr chan<- error) {
 			return
 		}
 	}
+}
+
+func nodeFault(err error) bool {
+	he, ok := errors.AsType[*APIError](err)
+	return ok && he.Status >= http.StatusInternalServerError
 }
