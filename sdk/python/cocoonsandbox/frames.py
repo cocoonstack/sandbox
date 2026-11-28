@@ -6,7 +6,6 @@ import base64
 import binascii
 import contextlib
 import json
-import sys
 from typing import Any
 
 PROTO_VERSION = 1
@@ -14,7 +13,6 @@ MAX_FRAME = 8 * 1024 * 1024
 BULK_CHUNK = 256 * 1024
 # tar and port streams chunk at 1 MiB, still under MAX_FRAME after base64
 STREAM_CHUNK = 1 << 20
-_FAST_DATA = sys.version_info >= (3, 11)
 
 
 def encode_request(op: str, **fields: object) -> bytes:
@@ -34,7 +32,7 @@ def encode_request(op: str, **fields: object) -> bytes:
 
 def decode_response(line: bytes) -> dict[str, Any]:
     """Decodes one response with binary payloads under data."""
-    if _FAST_DATA and line.startswith(b'{"type":"'):
+    if line.startswith(b'{"type":"'):
         te = line.find(b'"', 9)
         if te > 0 and line[9:te] in (b"stdout", b"stderr", b"data") and line.startswith(b'","data":"', te):
             de = line.find(b'"', te + 10)

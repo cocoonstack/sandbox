@@ -17,6 +17,6 @@ One session is one claimed sandbox; `delete` releases it, `resume`
 reattaches from serialized state (node address, api token, sandbox id and
 token, owner). Exec maps to streaming
 `run`, workspace persist/hydrate to tar pull/push, exposed ports to local
-port proxies. Requires Python >= 3.10 (the `openai-agents` floor).
+port proxies. Requires Python >= 3.12, the version CI tests.
 
 Full reference: https://cocoonstack.github.io/sandbox/openai-adapter

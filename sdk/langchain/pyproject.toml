@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "cocoonstack-sandbox-langchain"
 version = "0.1.7"
 description = "LangChain tools backed by cocoon microVM sandboxes"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 readme = "README.md"
 dependencies = ["langchain-core>=1.0", "pydantic>=2", "cocoonstack-sandbox>=0.1.24"]
