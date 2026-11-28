@@ -52,7 +52,8 @@ when the pool intercepts, so a guest cannot turn its proxy into a host
 descriptor sink. A request on the HTTP door or inside an
 intercepted tunnel whose headers pass 64 KiB answers `431`, and an origin
 response whose headers pass 256 KiB answers `502`, so an open connection holds
-no more than that each way.
+no more than that each way. A dial to an origin or an upstream proxy, and the
+TLS handshake with an origin, each give up after 30 s.
 
 A SOCKS5 tunnel takes the decision an HTTP `CONNECT` to the same host takes,
 through the same code: a rule with a nonempty `methods` list that omits
@@ -573,7 +574,7 @@ exit. The
 upstream's own address is dialed with the node's plain dialer. An upstream
 that fails answers the guest 502 (SOCKS5: host unreachable) and never falls
 back to a direct dial. An allowed connection's audit record, and its usage
-records when they are on, name the upstream's `host:port`, never its credentials, and `GET env` blanks the value like every
+records when they are on, name the upstream's `host:port`, never its credentials (a request that fails in the TLS handshake with the target after the tunnel opened names none), and `GET env` blanks the value like every
 `guest: false` entry. Cost: a node without `egress_upstream` pays nothing; with
 it, each allowed request reads the claim's env snapshot, without a lock.
 

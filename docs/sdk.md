@@ -177,7 +177,9 @@ sb, err := client.Lookup(ctx, id, token)
 ```
 
 `Lookup` asks the entry node, then queries all mesh peers concurrently and
-binds to whichever confirms ownership first.
+binds to whichever confirms ownership first. When none does and a node
+answered a 5xx (a peer adopting the sandbox while the meta store is down, for
+example), `Lookup` returns that error instead of "no owner found".
 
 ## Claiming
 
@@ -655,7 +657,8 @@ err = w.Err()                          // why the stream ended; nil after Close
 
 `Watch` returns once the guest acknowledges the watch is armed — events
 caused after it returns are guaranteed captured, except under a directory
-the guest cannot watch (a symlink loop, for example), which the watch skips.
+whose own watch fails (a symlink loop, for example), which the watch skips;
+reaching the guest's inotify watch limit ends the watch with an error.
 A bad path fails synchronously; if the consumer falls too far behind, `Err`
 reports a terminal overflow instead of the stream silently dropping events.
 
