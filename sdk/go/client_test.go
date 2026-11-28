@@ -705,6 +705,27 @@ func TestCloseReportsAPeerThatCouldNotAnswerTheLookup(t *testing.T) {
 	}
 }
 
+func TestCloseReportsAPeerThatCannotBeReached(t *testing.T) {
+	err := goneSandboxAt(t, retiredAddr(t)).Close()
+	if _, answered := errors.AsType[*APIError](err); err == nil || answered {
+		t.Fatalf("Close: %v, want the dial error of the peer that could not be asked", err)
+	}
+}
+
+func TestCloseReportsAFailedPeerDiscovery(t *testing.T) {
+	old := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/peers" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	err := testSandbox(t, old).Close()
+	if he, ok := errors.AsType[*APIError](err); !ok || he.Status != http.StatusServiceUnavailable {
+		t.Fatalf("Close: %v, want the peer listing's 503", err)
+	}
+}
+
 func TestCloseOfASandboxNoPeerHoldsIsNotAnError(t *testing.T) {
 	if err := goneSandbox(t, http.StatusNotFound).Close(); err != nil {
 		t.Fatalf("Close: %v, want nil for a sandbox no node holds", err)
@@ -764,10 +785,14 @@ func movedSandbox(t *testing.T) (*Sandbox, string) {
 
 func goneSandbox(t *testing.T, peerStatus int) *Sandbox {
 	t.Helper()
-	peer := statusServer(t, peerStatus, nil)
+	return goneSandboxAt(t, addrOf(statusServer(t, peerStatus, nil)))
+}
+
+func goneSandboxAt(t *testing.T, peer string) *Sandbox {
+	t.Helper()
 	old := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
-			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(peer)}})
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{peer}})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)

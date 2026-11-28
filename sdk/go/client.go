@@ -25,7 +25,10 @@ const (
 	noRedirectQueryParam = "no_redirect"
 )
 
-var errRedirectedAgain = errors.New("redirected again despite no_redirect")
+var (
+	errRedirectedAgain = errors.New("redirected again despite no_redirect")
+	errNoOwner         = errors.New("no owner found")
+)
 
 // ClientOption configures Connect.
 type ClientOption func(*Client)
@@ -134,12 +137,17 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 // Lookup finds the sandbox owner using its id and token.
 func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error) {
 	var down atomic.Pointer[APIError]
+	var unreached atomic.Pointer[error]
 	probe := func(ctx context.Context, addr string) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, peersTimeout)
 		defer cancel()
 		owner, err := c.ownerAt(ctx, addr, id, token)
-		if he, ok := errors.AsType[*APIError](err); ok && he.Status >= http.StatusInternalServerError {
+		he, answered := errors.AsType[*APIError](err)
+		switch {
+		case answered && he.Status >= http.StatusInternalServerError:
 			down.CompareAndSwap(nil, he)
+		case err != nil && !answered:
+			unreached.CompareAndSwap(nil, &err)
 		}
 		return owner, err
 	}
@@ -152,7 +160,10 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 		if he := down.Load(); he != nil {
 			return nil, fmt.Errorf("lookup %s: %w", id, he)
 		}
-		return nil, errors.Join(fmt.Errorf("lookup %s: no owner found", id), peersErr)
+		if ue := unreached.Load(); ue != nil {
+			return nil, fmt.Errorf("lookup %s: %w", id, *ue)
+		}
+		return nil, errors.Join(fmt.Errorf("lookup %s: %w", id, errNoOwner), peersErr)
 	}
 	return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 }

@@ -97,7 +97,7 @@ class Client(_Closeable):
         try:
             return _scatter([self.addr, *peers], probe)
         except APIError as exc:
-            if exc.status >= 500:
+            if exc.status >= 500 or exc.status == 0:
                 raise
             if peers_err is not None and peers_err.status >= 500:
                 raise peers_err from None
@@ -346,6 +346,12 @@ def _redirect_fallback(
             raise APIError(verb, origin_exc.status, combined) from origin_exc
 
 
+def _failure_rank(exc: Exception | None) -> int:
+    if not isinstance(exc, APIError):
+        return 0 if exc is None else 1
+    return 3 if exc.status >= 500 else 2 if exc.status == 0 else 1
+
+
 def _scatter(addrs: Sequence[str], probe: Callable[[str], _T]) -> _T:
     results: queue.Queue[tuple[_T | None, Exception | None]] = queue.Queue(maxsize=len(addrs))
 
@@ -362,6 +368,6 @@ def _scatter(addrs: Sequence[str], probe: Callable[[str], _T]) -> _T:
         value, error = results.get()
         if error is None:
             return cast(_T, value)
-        if not (isinstance(failure, APIError) and failure.status >= 500):
+        if _failure_rank(error) > _failure_rank(failure):
             failure = error
     raise cast(Exception, failure)

@@ -421,7 +421,7 @@ class Sandbox:
         except APIError as exc:
             if unreachable is not None:
                 raise unreachable from None
-            if exc.status >= 500:
+            if exc.status != 404:
                 raise
             return
         try:

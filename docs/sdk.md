@@ -179,7 +179,8 @@ sb, err := client.Lookup(ctx, id, token)
 `Lookup` asks the entry node, then queries all mesh peers concurrently and
 binds to whichever confirms ownership first. When none does and a node
 answered a 5xx (a peer adopting the sandbox while the meta store is down, for
-example), `Lookup` returns that error instead of "no owner found".
+example) or could not be reached, `Lookup` returns that error instead of "no
+owner found".
 
 ## Claiming
 
@@ -216,8 +217,9 @@ promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
 later `Lookup`; `Close()` releases the sandbox (it follows a sandbox that
 moved to another node with a `Lookup`, also when that node is gone, releasing
-one already gone is not an error unless a node answers that lookup with a 5xx,
-which `Close` returns, and `Close` is bounded internally so it stays defer-friendly). Every
+one already gone is not an error unless a node answers that lookup with a 5xx
+or cannot be reached, which `Close` returns, and `Close` is bounded internally
+so it stays defer-friendly). Every
 other call follows a move too: a 404 or a refused connection from the owner
 runs `Lookup` once, and a different owner replaces the old one. A call whose
 request is its whole input is sent again there: the control calls, `Run`
