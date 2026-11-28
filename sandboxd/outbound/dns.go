@@ -31,7 +31,6 @@ const (
 	resolvConfTTL   = 5 * time.Second
 	dnsIdle         = 30 * time.Second
 	dnsExchange     = 2 * time.Second
-	dnsAcceptRetry  = 50 * time.Millisecond
 	dnsQueryRate    = 50
 	dnsQueryBurst   = 200
 	dnsRefusalRate  = 1
@@ -89,17 +88,7 @@ func newResolver(ctx context.Context, h *Host, fenced func() bool, record func(D
 }
 
 func (r *resolver) serve(ln net.Listener, datagram bool) {
-	for {
-		conn, err := ln.Accept()
-		if errors.Is(err, net.ErrClosed) {
-			return
-		}
-		if err != nil {
-			time.Sleep(dnsAcceptRetry)
-			continue
-		}
-		go r.serveConn(conn, datagram)
-	}
+	acceptEach(ln, func(error) {}, func(conn net.Conn) { go r.serveConn(conn, datagram) })
 }
 
 func (r *resolver) serveConn(conn net.Conn, datagram bool) {
