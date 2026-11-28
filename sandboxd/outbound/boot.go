@@ -40,7 +40,7 @@ func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListe
 			return
 		}
 	}
-	if !h.publishBoot(sb.ID, ln) {
+	if !h.publishReserved(h.boots, sb.ID, ln) {
 		closeBoot(ln)
 		return
 	}
@@ -56,12 +56,6 @@ func (h *Host) takeBootLocked(sb *types.Sandbox) (ln, displaced *net.UnixListene
 		h.boots[sb.ID] = nil
 	}
 	return ln, displaced
-}
-
-func (h *Host) publishBoot(id string, ln *net.UnixListener) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return publishReserved(h.boots, id, ln)
 }
 
 func (h *Host) serveBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListener) {
