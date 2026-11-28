@@ -96,6 +96,26 @@ func TestInfoRoundTripRejectsErrorFrame(t *testing.T) {
 	}
 }
 
+func TestKillSilkdTreatsAGoneProcessAsKilled(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		reply   string
+		wantErr bool
+	}{
+		{"done", `{"type":"done"}` + "\n", false},
+		{"not found", `{"type":"error","kind":"not_found","message":"pid 7"}` + "\n", false},
+		{"other error", errFrame, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := sockPath(t)
+			listenMuxer(t, path, "OK 2048\n", tt.reply)
+			if err := newTestEngine().KillSilkd(t.Context(), path, 7); (err != nil) != tt.wantErr {
+				t.Errorf("KillSilkd: %v, want error %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestProbeRetriesPastFailures(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", errFrame, errFrame, infoFrame)

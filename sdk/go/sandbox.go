@@ -338,19 +338,11 @@ func (s *Sandbox) connect(ctx context.Context, req wire.Request) (*agentConn, er
 	if c := s.pool.take(); c != nil {
 		return c.sent(req)
 	}
-	c, err := s.dial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return c.sent(req)
-}
-
-func (s *Sandbox) dial(ctx context.Context) (*agentConn, error) {
 	raw, err := s.c.dialAgent(ctx, s.Owner(), s.ID, s.token)
 	if err != nil {
 		return nil, err
 	}
-	return newAgentConn(raw), nil
+	return newAgentConn(raw).sent(req)
 }
 
 // markGone tags an owner's 404 or refused dial, after which nothing reached it.
