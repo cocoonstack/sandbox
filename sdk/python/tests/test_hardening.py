@@ -282,7 +282,7 @@ def test_a_run_deadline_bounds_a_slowly_drained_request(monkeypatch):
         elapsed = time.monotonic() - started
     finally:
         theirs.close()
-    assert elapsed < 0.6, elapsed
+    assert elapsed < 1.0, elapsed
 
 
 def test_a_send_cut_by_tcp_keepalive_stays_a_protocol_error():

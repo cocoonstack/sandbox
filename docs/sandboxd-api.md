@@ -774,7 +774,7 @@ targets online — no restart, and no live claim's VM is touched. With
 node of the cell. On a node with egress policies,
 whether a key is pooled decides which [policy layers](egress.md) a claim of it
 gets; that is settled when the claim is made (a [resize](#post-v1sandboxesidresize) moves a claim
-to its target pool's layers, except a promoted template's clone), so adding or dropping a pool here
+to its target pool's layers, except a clone of a promoted template, or a fork or branch of one), so adding or dropping a pool here
 changes only claims made afterwards — a key that gains a pool with no `egress`
 block leaves new tenant claims without egress, a key that loses such a pool
 gives new tenant claims their egress class's policy alone:
@@ -986,7 +986,9 @@ node drops the claim (see [moving a running claim](cluster.md#moving-a-running-c
   admission refused (`target <peer>: <reason>`)
 - 502 the target is unreachable or failed
 - 503 the move or archive registry is down, the node lease is overdue, the node
-  is evacuating the claim (`sandbox moving to another node; retry`), or the
+  is evacuating the claim (`sandbox moving to another node; retry`), a
+  [resize](#post-v1sandboxesidresize) replaced the claim while the move waited
+  (`sandbox changed while the call waited; retry`), or the
   final round would not fit `max_downtime_ms`, after at most 4 deltas or once
   its capture overran it with the guest paused (the guest resumes here)
 
@@ -1377,8 +1379,8 @@ The claim keeps its id, token, disk, env and lease, and takes the pool key of
 its template and lane at `size`. The node must have that pool. From then on
 the claim is a claim of that pool: its egress policy, archive and idle
 settings, reader and replication apply, and `GET /v1/sandboxes/{id}` reports
-the new `key` and `cpu_count`. A clone of a promoted template keeps the
-egress policy, tun and replication settings of the pool its template was
+the new `key` and `cpu_count`. A clone of a promoted template, or a fork or
+branch of one, keeps the egress policy, tun and replication settings of the pool its template was
 promoted from, and a claim made with
 `"egress": false` keeps no egress. The claim's tun state does not change: one with an overlay address keeps it, and one without that
 enters a `tun` pool holds none until

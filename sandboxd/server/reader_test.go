@@ -497,7 +497,7 @@ func newSleepingEnv(t *testing.T) *sleepingEnv {
 	env.srv = New("", "node:7777", env.manager, dialer, nil, nil, nil, nil)
 	env.ts = httptest.NewServer(env.srv.Handler())
 	t.Cleanup(func() {
-		env.srv.CloseRelays(t.Context())
+		env.srv.CloseRelays(context.Background())
 		env.ts.Close()
 	})
 	return env

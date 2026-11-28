@@ -171,7 +171,8 @@ branched). `sb.template_digest` is the exact content identity when the claim
 cloned a promoted template; it is empty for other sources. `Sandbox` is a
 context manager; `sb.close()` releases it (it follows a sandbox that moved to
 another node with a lookup, also when that node is gone; releasing one already
-gone is not an error — double-release and reap races stay silent). Every other
+gone is not an error — double-release and reap races stay silent — unless a
+node answers that lookup with a 5xx, which is raised). Every other
 call follows a move too: a 404 or a refused connection from the owner runs
 `client.lookup` once, and the call is sent again to a different owner, since
 every argument (stdin, file data, tar streams) is bytes. `find_iter` also retries
