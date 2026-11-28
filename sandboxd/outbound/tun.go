@@ -184,22 +184,15 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 }
 
 func (h *Host) serveTun(ctx context.Context, t *tunDoor) {
-	for {
-		conn, err := t.ln.Accept()
-		if errors.Is(err, net.ErrClosed) {
-			return
-		}
-		if err != nil {
-			log.WithFunc("outbound.serveTun").Warnf(ctx, "packet door of %s: %v", t.sb.ID, err)
-			time.Sleep(acceptBackoff)
-			continue
-		}
+	acceptEach(t.ln, func(err error) {
+		log.WithFunc("outbound.serveTun").Warnf(ctx, "packet door of %s: %v", t.sb.ID, err)
+	}, func(conn net.Conn) {
 		go func() {
 			if err := h.o.Router.Serve(conn, t.addr); err != nil {
 				log.WithFunc("outbound.serveTun").Debugf(ctx, "packet stream of %s: %v", t.sb.ID, err)
 			}
 		}()
-	}
+	})
 }
 
 func (h *Host) tunDown(id, sock string) {
@@ -227,4 +220,19 @@ func (h *Host) dropTun(t *tunDoor) {
 	_ = t.ln.Close()
 	h.o.Router.Disarm(t.addr)
 	h.o.TunBytes(t.sb, t.used.Load())
+}
+
+func acceptEach(ln net.Listener, failed func(error), handle func(net.Conn)) {
+	for {
+		conn, err := ln.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			return
+		}
+		if err != nil {
+			failed(err)
+			time.Sleep(acceptBackoff)
+			continue
+		}
+		handle(conn)
+	}
 }

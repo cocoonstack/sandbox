@@ -3,7 +3,6 @@ package outbound
 import (
 	"bufio"
 	"context"
-	"errors"
 	"io"
 	"net"
 	"strings"
@@ -59,20 +58,13 @@ func (h *Host) takeBootLocked(sb *types.Sandbox) (ln, displaced *net.UnixListene
 }
 
 func (h *Host) serveBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListener) {
-	for {
-		conn, err := ln.Accept()
-		if errors.Is(err, net.ErrClosed) {
-			return
-		}
-		if err != nil {
-			log.WithFunc("outbound.serveBoot").Warnf(ctx, "boot door of %s: %v", sb.ID, err)
-			time.Sleep(acceptBackoff)
-			continue
-		}
+	acceptEach(ln, func(err error) {
+		log.WithFunc("outbound.serveBoot").Warnf(ctx, "boot door of %s: %v", sb.ID, err)
+	}, func(conn net.Conn) {
 		if h.takeBootNotice(ctx, sb, conn) {
 			time.Sleep(bootNoticeGap)
 		}
-	}
+	})
 }
 
 func (h *Host) takeBootNotice(ctx context.Context, sb *types.Sandbox, conn net.Conn) bool {
