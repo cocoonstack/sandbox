@@ -2,8 +2,8 @@ package pool
 
 import (
 	"context"
-	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -114,16 +114,10 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 	snap, readerSafe, deadline := sb.HibernateSnap, sb.ReaderSafe, sb.Deadline
 	sb.HibernateSnap, sb.ReaderSafe = "", false
 	m.renewWokenLeaseLocked(sb)
-	dto := dtoOf(sb)
-	dto.Key = key
-	raw, err := json.Marshal(&dto)
-	if err == nil {
-		err = json.Unmarshal(raw, next)
-	}
-	if err != nil {
-		sb.HibernateSnap, sb.ReaderSafe, sb.Deadline = snap, readerSafe, deadline
-		m.mu.Unlock()
-		return nil, "", fmt.Errorf("copy the claim: %w", err)
+	next.ClaimRecord = dtoOf(sb)
+	next.Key, next.Metadata, next.Env = key, maps.Clone(sb.Metadata), maps.Clone(sb.Env)
+	if sb.MoveOut != nil {
+		next.MoveOut = new(*sb.MoveOut)
 	}
 	if next.VolumesWant == nil {
 		next.VolumesWant = next.Volumes
@@ -141,7 +135,7 @@ func (m *Manager) reshape(ctx context.Context, sb *types.Sandbox, key types.Pool
 		Tenant: next.Tenant, Deadline: next.Deadline,
 	}
 	m.mu.Unlock()
-	if err = m.store.commit(js); err != nil {
+	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
 		var rb claimSnapshot
 		if m.claimed[next.ID] == next {
