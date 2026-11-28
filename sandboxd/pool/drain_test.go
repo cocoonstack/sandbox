@@ -135,7 +135,7 @@ func TestEvacuateHandOffOfARowAPeerTookDropsTheClaim(t *testing.T) {
 		mustArchive(t, a, sb)
 		a.archives = &hookRegistry{Registry: c.reg, beforeRelease: func() {
 			c.expire("a")
-			if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+			if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 				t.Errorf("adopt once a's lease lapsed: %v %v, want adopted", adopted, err)
 			}
 			if err := c.reg.Renew(t.Context(), "a", time.Hour); err != nil {
@@ -525,7 +525,7 @@ func TestEvacuateMovesTheCheapestClaimsFirst(t *testing.T) {
 		var moved []string
 		a.WithPeerAdopt(func(ctx context.Context, id, token string, _ bool) bool {
 			moved = append(moved, id)
-			adopted, err := b.AdoptArchived(ctx, id, Cred{Token: token})
+			adopted, err := b.Adopt(ctx, id, Cred{Token: token}, false)
 			return err == nil && adopted
 		})
 
@@ -593,7 +593,7 @@ func TestEvacuateConvergesWhenAPeersAnswerIsLost(t *testing.T) {
 		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		a.WithPeerAdopt(func(ctx context.Context, id, token string, _ bool) bool {
-			if _, err := b.AdoptArchived(ctx, id, Cred{Token: token}); err != nil {
+			if _, err := b.Adopt(ctx, id, Cred{Token: token}, false); err != nil {
 				t.Errorf("adopt: %v", err)
 			}
 			return false
@@ -783,7 +783,7 @@ func TestEvacuateHandsATokenlessClaimOnAsTheRoot(t *testing.T) {
 							t.Errorf("hand-off sent token %q, want the root", token)
 						}
 						asked.Add(1)
-						adopted, err := d.adopt(ctx, id, Cred{Token: token}, room)
+						adopted, err := d.Adopt(ctx, id, Cred{Token: token}, room)
 						return err == nil && adopted
 					})
 				}

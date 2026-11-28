@@ -281,7 +281,7 @@ func TestFailoverAnAdoptionThatCannotPersistLeavesTheRowToAPeer(t *testing.T) {
 	mustArchive(t, a, sb)
 	c.expire("a")
 	breakStore(t, b)
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil || adopted {
+	if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err == nil || adopted {
 		t.Fatalf("adopt with claims.json unwritable: %v %v, want an error", adopted, err)
 	}
 	if _, held := b.byID(sb.ID); held {
@@ -367,10 +367,10 @@ func TestFailoverAdoptionNeedsTheToken(t *testing.T) {
 	mustArchive(t, a, sb)
 	c.expire("a")
 
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}); err != nil || adopted {
+	if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: "wrong"}, false); err != nil || adopted {
 		t.Errorf("adopt with a wrong token: %v %v, want refused", adopted, err)
 	}
-	if adopted, err := b.AdoptArchived(t.Context(), "sb_unknown", Cred{Token: sb.Token}); err != nil || adopted {
+	if adopted, err := b.Adopt(t.Context(), "sb_unknown", Cred{Token: sb.Token}, false); err != nil || adopted {
 		t.Errorf("adopt of an id with no row: %v %v, want refused", adopted, err)
 	}
 	if _, held := b.byID(sb.ID); held {
@@ -391,7 +391,7 @@ func TestFailoverConcurrentAdoptionsLeaveOneOwner(t *testing.T) {
 	var wg sync.WaitGroup
 	for i, m := range adopters {
 		wg.Go(func() {
-			adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+			adopted, err := m.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false)
 			if err != nil {
 				t.Errorf("adopt on %s: %v", m.nodeID, err)
 			}
@@ -665,7 +665,7 @@ func TestFailoverAdoptionMidWakeFencesTheOwnerOut(t *testing.T) {
 	ck := sb.ArchiveCk
 	a.archives = &hookRegistry{Registry: c.reg, beforeConsume: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+		if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 			t.Errorf("adopt mid-wake: %v %v, want adopted", adopted, err)
 		}
 	}}
@@ -999,7 +999,7 @@ func TestFailoverRestartDropsAClaimAdoptedWhileItsInterruptedArchiveSettles(t *t
 	restarted := c.restart(t, a)
 	restarted.archives = &hookRegistry{Registry: c.reg, beforeDelete: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+		if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 			t.Errorf("adopt during the restart: %v %v, want adopted", adopted, err)
 		}
 	}}
@@ -1392,7 +1392,7 @@ func TestFailoverAWakeKeepsItsFenceAgainstThisNodesOwnAdoption(t *testing.T) {
 	mustAdopt(t, b, sb, "adopt")
 	b.archives = &hookRegistry{Registry: c.reg, beforeConsume: func() {
 		taken, _, _ := c.reg.Get(t.Context(), sb.ID)
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+		if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 			t.Errorf("racing adopt: %v %v, want this node to answer for the claim", adopted, err)
 		}
 		if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Epoch != taken.Epoch {
@@ -1437,7 +1437,7 @@ func TestFailoverConcurrentAdoptionsOnOneNodeAllAnswerForIt(t *testing.T) {
 	for range callers {
 		wg.Go(func() {
 			<-start
-			adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+			adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false)
 			if err != nil || !adopted {
 				refused.Add(1)
 			}
@@ -1474,7 +1474,7 @@ func TestFailoverACoalescedAdoptionStillNeedsTheToken(t *testing.T) {
 		wrong := make(chan bool, 1)
 		b.archives = &hookRegistry{Registry: c.reg, beforeTake: func() {
 			go func() {
-				ok, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"})
+				ok, _ := b.Adopt(t.Context(), sb.ID, Cred{Token: "wrong"}, false)
 				wrong <- ok
 			}()
 			synctest.Wait()
@@ -1655,7 +1655,7 @@ func TestFailoverRestartDropsAClaimConsumedWhileItSettlesItsInterruptedArchive(t
 	restarted := c.restart(t, a)
 	restarted.archives = &hookRegistry{Registry: c.reg, beforeDelete: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+		if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 			t.Errorf("adopt during the restart: %v %v, want adopted", adopted, err)
 		}
 		if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
@@ -1845,12 +1845,12 @@ func TestALookupRacingAWakeAdoptionTakesTheRowOnce(t *testing.T) {
 		lookup := make(chan bool, 1)
 		reg.afterTake = func() {
 			go func() {
-				adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+				adopted, _ := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false)
 				lookup <- adopted
 			}()
 			synctest.Wait()
 		}
-		if adopted, adoptErr := b.AdoptForWake(t.Context(), sb.ID, Cred{Token: sb.Token}); adoptErr != nil || !adopted {
+		if adopted, adoptErr := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, true); adoptErr != nil || !adopted {
 			t.Fatalf("wake adoption: %v %v", adopted, adoptErr)
 		}
 		if !<-lookup {
@@ -1895,24 +1895,20 @@ func TestFailoverTheRootAdoptsWithoutTheToken(t *testing.T) {
 			sb := mustClaim(t, a, testKey)
 			mustArchive(t, a, sb)
 			c.expire("a")
-			adopt := b.AdoptArchived
-			if room {
-				adopt = b.AdoptForWake
-			}
 			root := Cred{Operator: true}
 
 			for _, cred := range []Cred{{}, {Token: "wrong"}, {Token: "tenant-token"}} {
-				if adopted, err := adopt(t.Context(), sb.ID, cred); err != nil || adopted {
+				if adopted, err := b.Adopt(t.Context(), sb.ID, cred, room); err != nil || adopted {
 					t.Errorf("adopt with %q: %v %v, want refused", cred.Token, adopted, err)
 				}
 			}
-			if adopted, err := adopt(t.Context(), "sb_unknown", root); err != nil || adopted {
+			if adopted, err := b.Adopt(t.Context(), "sb_unknown", root, room); err != nil || adopted {
 				t.Errorf("root adopt of an id with no row: %v %v, want refused", adopted, err)
 			}
-			if adopted, err := adopt(t.Context(), sb.ID, root); err != nil || !adopted {
+			if adopted, err := b.Adopt(t.Context(), sb.ID, root, room); err != nil || !adopted {
 				t.Fatalf("root adopt: %v %v, want adopted", adopted, err)
 			}
-			if adopted, err := adopt(t.Context(), sb.ID, root); err != nil || !adopted {
+			if adopted, err := b.Adopt(t.Context(), sb.ID, root, room); err != nil || !adopted {
 				t.Errorf("root lookup of the held claim: %v %v, want held", adopted, err)
 			}
 			held, _ := b.byID(sb.ID)
@@ -1925,7 +1921,7 @@ func TestFailoverTheRootAdoptsWithoutTheToken(t *testing.T) {
 			if _, err := b.AgentSocket(sb.ID, Cred{Token: placeholder}); !errors.Is(err, ErrUnknownSandbox) {
 				t.Errorf("agent socket with the placeholder: %v, want ErrUnknownSandbox", err)
 			}
-			if adopted, err := adopt(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+			if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, room); err != nil || !adopted {
 				t.Errorf("claim token lookup of the root-adopted claim: %v %v, want held", adopted, err)
 			}
 		})
@@ -2067,13 +2063,13 @@ func TestFailoverARootAndATokenLookupRacingKeepOneClaim(t *testing.T) {
 		lookup := make(chan bool, 1)
 		reg.afterTake = func() {
 			go func() {
-				adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+				adopted, _ := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false)
 				lookup <- adopted
 			}()
 			synctest.Wait()
 		}
 
-		if adopted, adoptErr := b.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); adoptErr != nil || !adopted {
+		if adopted, adoptErr := b.Adopt(t.Context(), sb.ID, Cred{Operator: true}, false); adoptErr != nil || !adopted {
 			t.Fatalf("root adoption: %v %v", adopted, adoptErr)
 		}
 		if !<-lookup {
@@ -2129,7 +2125,7 @@ func TestFailoverAReleaseDuringAnAdoptionOnThisNodeLeavesNoPhantom(t *testing.T)
 				racing := make(chan bool, 1)
 				reg.afterTake = func() {
 					go func() {
-						adopted, _ := b.AdoptArchived(t.Context(), sb.ID, tt.racing(sb))
+						adopted, _ := b.Adopt(t.Context(), sb.ID, tt.racing(sb), false)
 						racing <- adopted
 					}()
 					synctest.Wait()
@@ -2138,7 +2134,7 @@ func TestFailoverAReleaseDuringAnAdoptionOnThisNodeLeavesNoPhantom(t *testing.T)
 					}
 				}
 
-				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.leader(sb)); err != nil || !adopted {
+				if adopted, err := b.Adopt(t.Context(), sb.ID, tt.leader(sb), false); err != nil || !adopted {
 					t.Fatalf("leading lookup: %v %v", adopted, err)
 				}
 				if !<-racing {
@@ -2158,7 +2154,7 @@ func TestFailoverAReleaseDuringAnAdoptionOnThisNodeLeavesNoPhantom(t *testing.T)
 				if _, ok, _ = c.reg.Get(t.Context(), sb.ID); ok {
 					t.Error("the release left the row")
 				}
-				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); err != nil || adopted {
+				if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Operator: true}, false); err != nil || adopted {
 					t.Errorf("root lookup after the release: %v %v, want nothing to adopt", adopted, err)
 				}
 				if _, held := b.byID(sb.ID); held {
@@ -2193,13 +2189,13 @@ func TestFailoverLookupsSharingAnAdoptionAnswerWithTheirOwnCredential(t *testing
 				follower := make(chan bool, 1)
 				reg.afterTake = func() {
 					go func() {
-						adopted, _ := b.AdoptArchived(t.Context(), sb.ID, tt.follower(sb))
+						adopted, _ := b.Adopt(t.Context(), sb.ID, tt.follower(sb), false)
 						follower <- adopted
 					}()
 					synctest.Wait()
 				}
 
-				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.leader(sb)); err != nil || !adopted {
+				if adopted, err := b.Adopt(t.Context(), sb.ID, tt.leader(sb), false); err != nil || !adopted {
 					t.Fatalf("leading lookup: %v %v", adopted, err)
 				}
 				if got := <-follower; got != tt.want || reg.takes.Load() != 1 {
@@ -2224,16 +2220,16 @@ func TestFailoverALookupFollowingARefusedAdoptionAdoptsWithItsOwnToken(t *testin
 				follower := make(chan bool, 1)
 				reg.beforeGet = sync.OnceFunc(func() {
 					for range wrong {
-						go func() { _, _ = b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}) }()
+						go func() { _, _ = b.Adopt(t.Context(), sb.ID, Cred{Token: "wrong"}, false) }()
 					}
 					go func() {
-						adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+						adopted, _ := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false)
 						follower <- adopted
 					}()
 					synctest.Wait()
 				})
 
-				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}); err != nil || adopted {
+				if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: "wrong"}, false); err != nil || adopted {
 					t.Fatalf("wrong-token lookup: %v %v, want refused", adopted, err)
 				}
 				if !<-follower {
@@ -2257,7 +2253,7 @@ func TestFailoverHeldFenceDropsAnArchivedClaimAnotherNodeOwns(t *testing.T) {
 	if _, err := c.reg.Release(t.Context(), sb.ID, held.ArchiveEpoch, "a"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); err != nil || !adopted {
+	if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Operator: true}, false); err != nil || !adopted {
 		t.Fatalf("root adopt on b: %v %v", adopted, err)
 	}
 	moved, _ := b.byID(sb.ID)
@@ -2288,7 +2284,7 @@ func TestFailoverHeldFenceDropsAClaimWhoseRowIsOwnerless(t *testing.T) {
 	if _, kept := a.byID(sb.ID); kept {
 		t.Error("a still holds a claim whose row it no longer owns")
 	}
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+	if adopted, err := b.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 		t.Fatalf("adopt on b after the drop: %v %v", adopted, err)
 	}
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "b" {
@@ -2425,7 +2421,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 			if p.nodeID == name {
 				return false
 			}
-			adopted, err := p.adopt(ctx, id, peerCred(token), room)
+			adopted, err := p.Adopt(ctx, id, peerCred(token), room)
 			return err == nil && adopted
 		})
 	})
@@ -2583,7 +2579,7 @@ func assertReleasedForGood(t *testing.T, c *failoverCluster, sb *types.Sandbox, 
 	}
 	c.expire("a")
 	for _, m := range nodes {
-		if adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || adopted {
+		if adopted, err := m.Adopt(t.Context(), sb.ID, Cred{Token: sb.Token}, false); err != nil || adopted {
 			t.Errorf("node %s adopts the released claim: %v %v, want a 404", m.nodeID, adopted, err)
 		}
 	}
@@ -2675,7 +2671,7 @@ func peerCred(token string) Cred {
 
 func mustRootAdopt(t *testing.T, m *Manager, sb *types.Sandbox) string {
 	t.Helper()
-	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); err != nil || !adopted {
+	if adopted, err := m.Adopt(t.Context(), sb.ID, Cred{Operator: true}, false); err != nil || !adopted {
 		t.Fatalf("root adopt: %v %v, want adopted", adopted, err)
 	}
 	return tenants.TokenSHA256(sb.Token)

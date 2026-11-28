@@ -19,17 +19,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
-// AdoptArchived takes over a claim whose owner's lease expired and reports whether this node owns it now; the root needs no token match.
-func (m *Manager) AdoptArchived(ctx context.Context, id string, cred Cred) (bool, error) {
-	return m.adopt(ctx, id, cred, false)
-}
-
-// AdoptForWake adopts as AdoptArchived does, but only while this node could admit the claim's wake.
-func (m *Manager) AdoptForWake(ctx context.Context, id string, cred Cred) (bool, error) {
-	return m.adopt(ctx, id, cred, true)
-}
-
-func (m *Manager) adopt(ctx context.Context, id string, cred Cred, room bool) (bool, error) {
+// Adopt takes over a claim whose owner's lease expired and reports whether this node owns it now; room adopts only while this node could admit the claim's wake, and the root needs no token match.
+func (m *Manager) Adopt(ctx context.Context, id string, cred Cred, room bool) (bool, error) {
 	if m.archives == nil {
 		return false, nil
 	}

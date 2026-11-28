@@ -2764,17 +2764,13 @@ func (f *fakeManager) AgentSocket(id string, cred pool.Cred) (string, error) {
 	return f.socket(id, credToken(cred))
 }
 
-func (f *fakeManager) AdoptArchived(_ context.Context, id string, cred pool.Cred) (bool, error) {
+func (f *fakeManager) Adopt(_ context.Context, id string, cred pool.Cred, room bool) (bool, error) {
 	f.gotCred = cred
+	f.adoptedForWake = f.adoptedForWake || room
 	if f.adopt == nil {
 		return false, nil
 	}
 	return f.adopt(id, credToken(cred))
-}
-
-func (f *fakeManager) AdoptForWake(ctx context.Context, id string, cred pool.Cred) (bool, error) {
-	f.adoptedForWake = true
-	return f.AdoptArchived(ctx, id, cred)
 }
 
 func (f *fakeManager) WakeAgentSocket(_ context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error) {

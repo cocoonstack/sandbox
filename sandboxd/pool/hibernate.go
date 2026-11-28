@@ -237,7 +237,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		log.WithFunc("pool.wakeOrRead").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
-	if m.disarmIfReleased(sb) {
+	if m.disarmIfReleased(sb, true) {
 		if err == nil {
 			m.dropStale(ctx, sb)
 			m.dropSnap(ctx, snap)

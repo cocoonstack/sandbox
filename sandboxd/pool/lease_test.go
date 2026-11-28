@@ -301,7 +301,7 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 		cut.beforeTake = func() {
 			fencedAtTake = a.isFenced()
 			c.expire("a")
-			if adopted, err := b.AdoptArchived(ctx, sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+			if adopted, err := b.Adopt(ctx, sb.ID, Cred{Token: sb.Token}, false); err != nil || !adopted {
 				t.Errorf("adopt during the owner's unfence: %v %v", adopted, err)
 			}
 		}

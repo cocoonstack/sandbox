@@ -50,13 +50,13 @@ func (m *Manager) NetRoute(sb *types.Sandbox) types.NetRoute {
 	return m.out.Route(sb)
 }
 
-// disarmIfReleased tears down a wake-path proxy if Release dropped the claim in the arm window.
-func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
+// disarmIfReleased tears down sb's proxy if Release dropped the claim in the arm window.
+func (m *Manager) disarmIfReleased(sb *types.Sandbox, removed bool) bool {
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb
 	m.mu.Unlock()
 	if !live {
-		m.out.Disarm(sb.ID, true)
+		m.out.Disarm(sb.ID, removed)
 	}
 	return !live
 }

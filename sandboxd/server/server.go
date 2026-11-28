@@ -144,8 +144,7 @@ type Manager interface {
 	HasPoolGolden(key types.PoolKey) bool
 	HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool
 	AgentSocket(id string, cred pool.Cred) (string, error)
-	AdoptArchived(ctx context.Context, id string, cred pool.Cred) (bool, error)
-	AdoptForWake(ctx context.Context, id string, cred pool.Cred) (bool, error)
+	Adopt(ctx context.Context, id string, cred pool.Cred, room bool) (bool, error)
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	DialPortAwake(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error)
@@ -895,11 +894,7 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		adopt := s.mgr.AdoptArchived
-		if r.URL.Query().Get("room") != "" {
-			adopt = s.mgr.AdoptForWake
-		}
-		adopted, adoptErr := adopt(r.Context(), id, cred)
+		adopted, adoptErr := s.mgr.Adopt(r.Context(), id, cred, r.URL.Query().Get("room") != "")
 		switch {
 		case adoptErr != nil:
 			writeResult(w, r, "adopt", id, "adopt archived sandbox failed", adoptErr, nil)

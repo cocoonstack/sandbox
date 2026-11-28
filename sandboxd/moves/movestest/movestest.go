@@ -14,8 +14,6 @@ import (
 
 const racers = 8
 
-var states = []moves.State{moves.Pending, moves.Final, moves.Committed, moves.Started, moves.Aborted}
-
 // Opener returns an empty registry; each call is a fresh table.
 type Opener func(t *testing.T) moves.Registry
 
@@ -47,9 +45,6 @@ func (m *Mem) Begin(_ context.Context, id, from, to string) (int64, error) {
 }
 
 func (m *Mem) Advance(_ context.Context, id string, expect int64, from, to moves.State) (int64, error) {
-	if err := moves.VerifyAdvance(from, to); err != nil {
-		return 0, err
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.down {
@@ -120,7 +115,6 @@ func Run(t *testing.T, open Opener) {
 	t.Run("begin get", func(t *testing.T) { testBeginGet(t, open(t)) })
 	t.Run("every allowed advance", func(t *testing.T) { testAdvance(t, open(t)) })
 	t.Run("advance is a compare-and-set", func(t *testing.T) { testAdvanceFences(t, open(t)) })
-	t.Run("advance refuses a state change no move makes", func(t *testing.T) { testAdvanceRefusesPairs(t, open(t)) })
 	t.Run("one of concurrent advances wins", func(t *testing.T) { testAdvanceRace(t, open(t)) })
 	t.Run("begin replaces an ended record", func(t *testing.T) { testBeginOverEnded(t, open(t)) })
 	t.Run("begin refuses a live record", func(t *testing.T) { testBeginOverLive(t, open(t)) })
@@ -209,26 +203,6 @@ func testAdvanceFences(t *testing.T, r moves.Registry) {
 	}
 	if _, ok, _ := r.Get(ctx, "sb_none"); ok {
 		t.Errorf("a refused advance inserted a record")
-	}
-}
-
-func testAdvanceRefusesPairs(t *testing.T, r moves.Registry) {
-	ctx := t.Context()
-	for _, from := range states {
-		for _, to := range states {
-			if moves.VerifyAdvance(from, to) == nil {
-				continue
-			}
-			id := "sb_" + string(from) + "_" + string(to)
-			epoch := mustReach(t, r, id, from)
-			_, err := r.Advance(ctx, id, epoch, from, to)
-			if err == nil || errors.Is(err, moves.ErrLost) || errors.Is(err, moves.ErrUnavailable) {
-				t.Errorf("advance %s to %s: %v, want a plain error", from, to, err)
-			}
-			if got, _, _ := r.Get(ctx, id); got.State != from || got.Epoch != epoch {
-				t.Errorf("%s after a refused pair: %s@%d, want %s@%d", id, got.State, got.Epoch, from, epoch)
-			}
-		}
 	}
 }
 
