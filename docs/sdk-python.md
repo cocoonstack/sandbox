@@ -135,6 +135,10 @@ across a process restart):
 sb = client.lookup(id, token)  # lists the peers, then probes the entry node and every peer concurrently
 ```
 
+When no node confirms the sandbox and one answered a 5xx (a peer adopting it
+while the meta store is down, for example), `lookup` raises that error instead
+of a 404 "no owner found".
+
 ## Claiming
 
 ```python
@@ -550,7 +554,8 @@ w.close()
 
 `watch` returns once the guest acknowledges the watch is armed — events
 caused after it returns are guaranteed captured, except under a directory
-the guest cannot watch (a symlink loop, for example), which the watch skips.
+whose own watch fails (a symlink loop, for example), which the watch skips;
+reaching the guest's inotify watch limit ends the watch with an error.
 A bad path fails synchronously; if the consumer falls too far behind,
 iteration raises the terminal overflow instead of silently dropping events.
 Iteration also ends when the relay drops, which `w.error` tells apart from a

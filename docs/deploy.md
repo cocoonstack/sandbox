@@ -436,7 +436,8 @@ returned. sandboxd closes the gaps that leaves:
 - A download whose body stops mid-read (`unexpected EOF`, a reset connection)
   is requested again. This covers chunks and the meta and manifest reads.
 - A download body that delivers no bytes for `stall_timeout_ms` is abandoned
-  and requested again. A body that is slow but keeps flowing is never cut.
+  and requested again. A body that is slow but keeps flowing is not cut by this
+  bound; only the 30-minute fetch bound above ends it.
 - A request that gets no response headers within `stall_timeout_ms` fails,
   and the SDK retries it. This covers every call: downloads, uploads,
   listings and deletes. A listing or a delete whose reply is cut mid-body is
@@ -450,7 +451,7 @@ keeps the default; a negative value is a config error.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `fetch_attempts` | 3 | requests per download, the first included; 1 turns the retry off |
+| `fetch_attempts` | 3 | attempts per download, the first included, each of which the SDK may retry on its own as above; 1 turns this retry off |
 | `fetch_retry_backoff_ms` | 200 | wait before retry *n* is *n* times this |
 | `stall_timeout_ms` | 30000 | longest wait for response headers, and longest gap between body bytes |
 
