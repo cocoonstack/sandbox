@@ -10,15 +10,13 @@ import threading
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import BinaryIO, TypeVar
+from typing import BinaryIO
 
 import pytest
 from cocoonsandbox import Client, Sandbox
 
 FIXTURES = pathlib.Path(__file__).parents[3] / "protocol" / "wire" / "fixtures" / "v1"
 GUARD = 10.0
-
-_T = TypeVar("_T")
 
 
 class FakeNode(BaseHTTPRequestHandler):
@@ -107,8 +105,8 @@ def accept_upgrade(conn: socket.socket) -> BinaryIO:
     return reader
 
 
-def bounded(call: Callable[[], _T]) -> _T:
-    outcome: queue.Queue[tuple[_T | None, BaseException | None]] = queue.Queue()
+def bounded[T](call: Callable[[], T]) -> T:
+    outcome: queue.Queue[tuple[T | None, BaseException | None]] = queue.Queue()
 
     def run() -> None:
         try:

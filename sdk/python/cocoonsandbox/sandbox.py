@@ -9,7 +9,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
 from .conn import Conn, ConnPool, _Closeable, remaining_timeout
@@ -35,10 +35,8 @@ if TYPE_CHECKING:
 _ACCEPT_POLL_SECONDS = 1.0
 _KILL_WAIT_SECONDS = 5.0
 
-_F = TypeVar("_F", bound=Callable[..., Any])
 
-
-def _follows_move(method: _F) -> _F:
+def _follows_move[F: Callable[..., Any]](method: F) -> F:
     """Runs a call once more on the owner a 404 points to; its arguments must be re-sendable."""
 
     @functools.wraps(method)
@@ -50,7 +48,7 @@ def _follows_move(method: _F) -> _F:
                 raise
         return method(self, *args, **kwargs)
 
-    return cast(_F, wrapper)
+    return cast(F, wrapper)
 
 
 class Sandbox:

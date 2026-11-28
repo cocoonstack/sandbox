@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .volumes import SandboxVolumesResponse
-
-_E = TypeVar("_E", bound="SandboxError")
 
 
 class SandboxError(Exception):
@@ -81,7 +79,7 @@ def _error_message(raw: bytes) -> str:
         return raw.decode(errors="replace").strip()
 
 
-def _mark_gone(exc: _E, tag: tuple[str, str]) -> _E:
+def _mark_gone[E: SandboxError](exc: E, tag: tuple[str, str]) -> E:
     """Tags an owner's 404 or refused dial with its (sandbox id, owner address)."""
     exc._owner_gone = tag
     return exc

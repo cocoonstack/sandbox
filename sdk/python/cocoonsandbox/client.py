@@ -10,7 +10,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterable, Sequence
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 from .checkpoint import Checkpoint
 from .conn import Conn, _Closeable, dial_agent, is_quiet, remaining_timeout
@@ -19,8 +19,6 @@ from .errors import APIError, SandboxTimeout, _DialError, _error_message, _requi
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
 from .volumes import Volume
-
-_T = TypeVar("_T")
 
 _PEERS_TIMEOUT = 5.0
 _IDLE_CONNS = 8
@@ -301,9 +299,9 @@ def _retry_miss(exc: APIError) -> bool:
     return exc.status in (404, 0)
 
 
-def _try_each(
-    candidates: Iterable[str], call: Callable[[str], _T], retry: Callable[[APIError], bool] = _retry_miss
-) -> _T:
+def _try_each[T](
+    candidates: Iterable[str], call: Callable[[str], T], retry: Callable[[APIError], bool] = _retry_miss
+) -> T:
     last_error = None
     for addr in candidates:
         try:
@@ -352,8 +350,8 @@ def _failure_rank(exc: Exception | None) -> int:
     return 3 if exc.status >= 500 else 2 if exc.status == 0 else 1
 
 
-def _scatter(addrs: Sequence[str], probe: Callable[[str], _T]) -> _T:
-    results: queue.Queue[tuple[_T | None, Exception | None]] = queue.Queue(maxsize=len(addrs))
+def _scatter[T](addrs: Sequence[str], probe: Callable[[str], T]) -> T:
+    results: queue.Queue[tuple[T | None, Exception | None]] = queue.Queue(maxsize=len(addrs))
 
     def run(addr: str) -> None:
         try:
@@ -367,7 +365,7 @@ def _scatter(addrs: Sequence[str], probe: Callable[[str], _T]) -> _T:
     for _ in addrs:
         value, error = results.get()
         if error is None:
-            return cast(_T, value)
+            return cast(T, value)
         if _failure_rank(error) > _failure_rank(failure):
             failure = error
     raise cast(Exception, failure)
