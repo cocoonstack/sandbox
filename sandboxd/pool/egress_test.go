@@ -423,7 +423,7 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	}
 	dialDoors(t, sb)
 	m.out.Disarm(sb.ID, true)
-	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+	if _, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.EgressPort)); err == nil {
 		t.Error("egress socket still accepts after disarm")
 	}
 }
@@ -433,7 +433,7 @@ func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: egPolicy})
 	warm := refillWarmVM(t, m)
-	path := engine.EgressSocketPath(warm.VsockSocket)
+	path := engine.DoorPath(warm.VsockSocket, engine.EgressPort)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("refill did not bind the door: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
-	conn, _ := outboundtest.ConnectDoor(t, engine.EgressSocketPath(clone.VsockSocket), "api.github.com:443")
+	conn, _ := outboundtest.ConnectDoor(t, engine.DoorPath(clone.VsockSocket, engine.EgressPort), "api.github.com:443")
 	tlsConn := tls.Client(conn, &tls.Config{ServerName: "api.github.com", InsecureSkipVerify: true})
 	if err = tlsConn.Handshake(); err != nil {
 		t.Fatalf("handshake through the door: %v", err)
@@ -524,7 +524,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 	eng.sockRoot = outboundtest.SockRoot(t)
 	pol := hostPolicy()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	door := engine.EgressSocketPath(refillWarmVM(t, m).VsockSocket)
+	door := engine.DoorPath(refillWarmVM(t, m).VsockSocket, engine.EgressPort)
 	warm, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{NoEgress: true})
 	if err != nil {
 		t.Fatalf("warm claim: %v", err)
@@ -545,7 +545,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 		if !sb.NoEgress || m.NetRoute(sb) != types.NetRouteNone {
 			t.Errorf("%s: route %q no_egress %v, want no door and the opt-out recorded", sb.ID, m.NetRoute(sb), sb.NoEgress)
 		}
-		if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+		if conn, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.EgressPort)); err == nil {
 			_ = conn.Close()
 			t.Errorf("%s: the egress door accepts", sb.ID)
 		}
@@ -587,7 +587,7 @@ func dialDoors(t *testing.T, sb *types.Sandbox) {
 }
 
 func doorPaths(sb *types.Sandbox) []string {
-	return []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)}
+	return []string{engine.DoorPath(sb.VsockSocket, engine.EgressPort), engine.DoorPath(sb.VsockSocket, engine.SocksPort)}
 }
 
 func pinDoors(t *testing.T, sb *types.Sandbox) []string {

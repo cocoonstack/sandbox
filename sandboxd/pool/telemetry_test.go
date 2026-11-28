@@ -674,7 +674,7 @@ func TestEgressDecisionsReachTheUsageJournalOnlyWhenOptedIn(t *testing.T) {
 		t.Fatalf("arm proxy: %v", err)
 	}
 	t.Cleanup(func() { m.out.Disarm(sb.ID, true) })
-	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
+	client := outboundtest.EgressClient(engine.DoorPath(sb.VsockSocket, engine.EgressPort))
 	get := func(url string) int {
 		resp, err := client.Get(url)
 		if err != nil {

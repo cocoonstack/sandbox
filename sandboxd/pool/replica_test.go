@@ -1605,7 +1605,7 @@ func TestARunningClaimThatMovedClosesItsDoors(t *testing.T) {
 	if got := a.out.Route(sb); got != types.NetRouteNone {
 		t.Errorf("route after the claim moved %q, want none", got)
 	}
-	if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+	if conn, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.EgressPort)); err == nil {
 		_ = conn.Close()
 		t.Error("the door of the removed VM still accepts")
 	}

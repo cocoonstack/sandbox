@@ -43,7 +43,7 @@ func TestClaimEnvFeedsTheLiveProxysSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimWarm: %v", err)
 	}
-	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
+	client := outboundtest.EgressClient(engine.DoorPath(sb.VsockSocket, engine.EgressPort))
 	send := func(method string) string {
 		t.Helper()
 		req, _ := http.NewRequestWithContext(t.Context(), method, origin.URL+"/", nil)

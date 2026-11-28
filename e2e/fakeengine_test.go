@@ -230,15 +230,11 @@ func (f *fakeEngine) DiskAttach(_ context.Context, vmName string, spec engine.Vo
 	return nil
 }
 
-func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {
+func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw, _ bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount+":"+volumeMode(rw))
 	return nil
-}
-
-func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
-	return f.MountVolume(ctx, sock, name, mount, rw)
 }
 
 func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) (bool, error) {

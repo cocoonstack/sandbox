@@ -79,10 +79,10 @@ func (d *doors) serves(p egress.PolicyEvaluator) bool {
 
 func (d *doors) specs(vsock string, p egress.PolicyEvaluator) [4]doorSpec {
 	return [...]doorSpec{
-		{&d.ln, engine.EgressSocketPath(vsock), "egress", true},
-		{&d.socks, engine.SocksSocketPath(vsock), "socks", p.ServesSocks()},
-		{&d.dns, engine.DNSSocketPath(vsock), "dns", p.ServesDNS()},
-		{&d.dnsGram, engine.DNSDatagramSocketPath(vsock), "dns datagram", p.ServesDNS()},
+		{&d.ln, engine.DoorPath(vsock, engine.EgressPort), "egress", true},
+		{&d.socks, engine.DoorPath(vsock, engine.SocksPort), "socks", p.ServesSocks()},
+		{&d.dns, engine.DoorPath(vsock, engine.DNSPort), "dns", p.ServesDNS()},
+		{&d.dnsGram, engine.DoorPath(vsock, engine.DNSGramPort), "dns datagram", p.ServesDNS()},
 	}
 }
 

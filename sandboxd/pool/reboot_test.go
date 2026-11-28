@@ -263,7 +263,7 @@ func TestAClaimReleasedBeforeItsArmGetsNoDoors(t *testing.T) {
 	if armedID != sb.ID {
 		t.Fatalf("released %q, want the claim %s released before its doors opened", armedID, sb.ID)
 	}
-	for _, path := range []string{engine.BootSocketPath(sb.VsockSocket), engine.EgressSocketPath(sb.VsockSocket)} {
+	for _, path := range []string{engine.DoorPath(sb.VsockSocket, engine.BootPort), engine.DoorPath(sb.VsockSocket, engine.EgressPort)} {
 		if conn, err := net.Dial("unix", path); err == nil {
 			_ = conn.Close()
 			t.Errorf("%s accepts for a released claim", path)
@@ -1025,7 +1025,7 @@ func TestANoticeOfAColdBootIsRecordedWithoutASettle(t *testing.T) {
 				}
 				if tt.door {
 					knockErr = knockBootDoor(eng.vms[name], coldBootID)
-				} else if conn, err := net.Dial("unix", engine.BootSocketPath(eng.vms[name])); err == nil {
+				} else if conn, err := net.Dial("unix", engine.DoorPath(eng.vms[name], engine.BootPort)); err == nil {
 					_ = conn.Close()
 				} else {
 					dialErr = err
@@ -1137,7 +1137,7 @@ func lockedSock(m *Manager, sb *types.Sandbox) string {
 }
 
 func knockBootDoor(sock, bootID string) error {
-	conn, err := net.Dial("unix", engine.BootSocketPath(sock))
+	conn, err := net.Dial("unix", engine.DoorPath(sock, engine.BootPort))
 	if err != nil {
 		return err
 	}

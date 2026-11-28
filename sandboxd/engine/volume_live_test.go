@@ -43,7 +43,7 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 				if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
 					t.Fatal(err)
 				}
-				if err := e.MountLiveVolume(t.Context(), sock, spec.Name, tt.mount, false); err != nil {
+				if err := e.MountVolume(t.Context(), sock, spec.Name, tt.mount, false, true); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -74,7 +74,7 @@ func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
 	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
 		t.Fatal(err)
 	}
-	err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/workspace/data", false)
+	err := e.MountVolume(t.Context(), sock, spec.Name, "/workspace/data", false, true)
 	if _, ok := errors.AsType[*VolumeMountConflict](err); !ok || !strings.Contains(err.Error(), `"/home/u/ws/data" has a different device`) {
 		t.Fatalf("mounted over another device behind a symlink or hid its real path: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestLiveMountReadsMountinfoBeyondTheSysfsCap(t *testing.T) {
 	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/data", false); err != nil {
+	if err := e.MountVolume(t.Context(), sock, spec.Name, "/data", false, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -109,7 +109,7 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 	} {
 		t.Run(strings.TrimSpace(row), func(t *testing.T) {
 			sock, fake, spec := newLiveFake(t, "", row)
-			err := newTestEngine().MountLiveVolume(t.Context(), sock, spec.Name, "/data", false)
+			err := newTestEngine().MountVolume(t.Context(), sock, spec.Name, "/data", false, true)
 			if err == nil {
 				t.Fatal("accepted a foreign mount")
 			}

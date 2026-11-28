@@ -66,7 +66,7 @@ func TestAForkChildHibernatedWhileAnEarlierChildArmsGetsNoDoors(t *testing.T) {
 	if later == nil {
 		t.Fatal("no later child was hibernated")
 	}
-	for _, path := range []string{engine.BootSocketPath(later.VsockSocket), engine.EgressSocketPath(later.VsockSocket)} {
+	for _, path := range []string{engine.DoorPath(later.VsockSocket, engine.BootPort), engine.DoorPath(later.VsockSocket, engine.EgressPort)} {
 		if conn, err := net.Dial("unix", path); err == nil {
 			_ = conn.Close()
 			t.Errorf("%s accepts for a child hibernated before its arm", path)

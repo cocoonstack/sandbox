@@ -143,7 +143,7 @@ func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
 		return
 	}
 	logger := log.WithFunc("outbound.Prebind")
-	if boot, err := bindUnix(engine.BootSocketPath(sb.VsockSocket)); err != nil {
+	if boot, err := bindUnix(engine.DoorPath(sb.VsockSocket, engine.BootPort)); err != nil {
 		logger.Warnf(ctx, "pre-bind the boot door of %s: %v; the claim binds it instead", sb.VMName, err)
 	} else {
 		h.mu.Lock()

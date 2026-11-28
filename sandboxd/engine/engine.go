@@ -36,6 +36,13 @@ const (
 	StaleCreateNotCreating StaleCreateOutcome = "not-creating"
 	StaleCreateNotFound    StaleCreateOutcome = "not-found"
 
+	EgressPort  = 2049
+	SocksPort   = 2050
+	TunPort     = 2051
+	DNSPort     = 2052
+	DNSGramPort = 2053
+	BootPort    = 2054
+
 	// requiredFloor carries the snapshot/store baseline and the JSON form of an empty snapshot list.
 	requiredFloor = "v0.6.9"
 	// liveVolumeFloor adds idempotent disk attach and detach for live volume changes.
@@ -51,12 +58,6 @@ const (
 	argBridge      = "--bridge"
 	formatJSON     = "json"
 	silkdPort      = 2048
-	egressPort     = 2049
-	socksPort      = 2050
-	dnsPort        = 2052
-	dnsGramPort    = 2053
-	tunPort        = 2051
-	bootPort       = 2054
 	cmdTimeout     = 2 * time.Minute
 	dumpTimeout    = 15 * time.Minute
 	cmdTermGrace   = 30 * time.Second
@@ -538,33 +539,9 @@ func (e *Engine) missesFloor(ctx context.Context, floor string) (string, bool) {
 	return version, known && below
 }
 
-// EgressSocketPath is the host UDS the VMM connects when the guest dials CID2:egressPort.
-func EgressSocketPath(vsockSocket string) string {
-	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
-}
-
-// DNSSocketPath is the host UDS the VMM connects when the guest dials CID2:dnsPort.
-func DNSSocketPath(vsockSocket string) string {
-	return fmt.Sprintf("%s_%d", vsockSocket, dnsPort)
-}
-
-// DNSDatagramSocketPath is the host UDS the VMM connects when the guest dials CID2:dnsGramPort.
-func DNSDatagramSocketPath(vsockSocket string) string {
-	return fmt.Sprintf("%s_%d", vsockSocket, dnsGramPort)
-}
-
-// SocksSocketPath is the host UDS the VMM connects when the guest dials CID2:socksPort.
-func SocksSocketPath(vsockSocket string) string {
-	return fmt.Sprintf("%s_%d", vsockSocket, socksPort)
-}
-
-// TunSocketPath is the host UDS the VMM connects when the guest dials CID2:tunPort.
-func TunSocketPath(vsockSocket string) string {
-	return fmt.Sprintf("%s_%d", vsockSocket, tunPort)
-}
-
-func BootSocketPath(vsockSocket string) string {
-	return fmt.Sprintf("%s_%d", vsockSocket, bootPort)
+// DoorPath is the host UDS the VMM connects when the guest dials CID2:port.
+func DoorPath(vsockSocket string, port int) string {
+	return fmt.Sprintf("%s_%d", vsockSocket, port)
 }
 
 // CapacitySignature returns the node-capacity signature err carries, or "".

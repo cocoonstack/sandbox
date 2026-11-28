@@ -110,7 +110,7 @@ func TestMoveDisarmsTheSourceDoorsAndArmsTheTarget(t *testing.T) {
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
 		t.Fatalf("move: %v", err)
 	}
-	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+	if _, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.EgressPort)); err == nil {
 		t.Error("the source still serves the moved claim's egress door")
 	}
 	moved, _ := mc.t.byID(sb.ID)
@@ -2123,7 +2123,7 @@ func assertNoMoveResidue(t *testing.T, m *Manager, id string) {
 
 func dialEgress(t *testing.T, sock string) {
 	t.Helper()
-	conn, err := net.Dial("unix", engine.EgressSocketPath(sock))
+	conn, err := net.Dial("unix", engine.DoorPath(sock, engine.EgressPort))
 	if err != nil {
 		t.Fatalf("no egress door at %s: %v", sock, err)
 	}

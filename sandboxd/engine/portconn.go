@@ -3,7 +3,6 @@ package engine
 import (
 	"bufio"
 	"bytes"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -37,21 +36,17 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 			g.pending = data
 			continue
 		}
-		var frame struct {
-			Type    string `json:"type"`
-			Data    []byte `json:"data"`
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(line, &frame); err != nil {
+		resp, err := wire.DecodeResponse(line)
+		if err != nil {
 			return 0, fmt.Errorf("port frame: %w", err)
 		}
-		switch frame.Type {
-		case "data":
-			g.pending = frame.Data
-		case "done", "":
+		switch resp := resp.(type) {
+		case *wire.DataResp:
+			g.pending = resp.Data
+		case *wire.Done:
 			return 0, io.EOF
 		default:
-			return 0, fmt.Errorf("port stream ended: %s %s", frame.Type, frame.Message)
+			return 0, fmt.Errorf("port stream ended: %w", frameErr(resp))
 		}
 	}
 	n := copy(p, g.pending)
@@ -89,16 +84,8 @@ func (g *guestPortConn) readFrame() ([]byte, error) {
 		g.r = bufio.NewReaderSize(io.MultiReader(bytes.NewReader(line), g.Conn), portReadBuf)
 		line, err = g.r.ReadSlice('\n')
 	}
-	if !errors.Is(err, bufio.ErrBufferFull) {
-		return line, err
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return nil, fmt.Errorf("port frame exceeds %d bytes", portReadBuf)
 	}
-	long := bytes.Clone(line)
-	for errors.Is(err, bufio.ErrBufferFull) {
-		line, err = g.r.ReadSlice('\n')
-		long = append(long, line...)
-		if len(long) > wire.MaxFrame {
-			return nil, fmt.Errorf("port frame exceeds %d bytes", wire.MaxFrame)
-		}
-	}
-	return long, err
+	return line, err
 }

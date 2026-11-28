@@ -637,7 +637,7 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatalf("socket: %v", err)
 		}
-		door := engine.EgressSocketPath(sock)
+		door := engine.DoorPath(sock, engine.EgressPort)
 		return claimed.ID, sock, &http.Client{Transport: &http.Transport{
 			Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "door"}),
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

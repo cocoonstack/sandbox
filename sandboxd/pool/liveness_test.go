@@ -210,7 +210,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 	}
 	first := mustManager(t, cfg, eng)
 	sb := mustClaim(t, first, testKey)
-	door := engine.EgressSocketPath(sb.VsockSocket)
+	door := engine.DoorPath(sb.VsockSocket, engine.EgressPort)
 	killVMM(eng, sb.VMName)
 	first.recoverVMM(t.Context(), sb)
 	first.out.Disarm(sb.ID, false)

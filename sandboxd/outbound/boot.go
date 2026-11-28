@@ -34,7 +34,7 @@ func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListe
 	}
 	if ln == nil {
 		var err error
-		if ln, err = bind(engine.BootSocketPath(sb.VsockSocket)); err != nil {
+		if ln, err = bind(engine.DoorPath(sb.VsockSocket, engine.BootPort)); err != nil {
 			h.dropReservation(h.boots, sb.ID)
 			log.WithFunc("outbound.armBoot").Warnf(ctx, "bind the boot door of %s, a reboot inside its guest goes unseen: %v", sb.ID, err)
 			return

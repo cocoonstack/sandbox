@@ -41,7 +41,7 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 	if armErr := h.Arm(t.Context(), sb); armErr != nil {
 		t.Fatalf("arm egress: %v", armErr)
 	}
-	path := engine.EgressSocketPath(sb.VsockSocket)
+	path := engine.DoorPath(sb.VsockSocket, engine.EgressPort)
 	client := outboundtest.EgressClient(path)
 
 	resp, err := client.Get(origin.URL + "/")
@@ -89,7 +89,7 @@ func TestArmEgressBindsSocksOnlyWhenOptedIn(t *testing.T) {
 			if armErr := h.ArmProxy(t.Context(), sb); armErr != nil {
 				t.Fatalf("arm proxy: %v", armErr)
 			}
-			path := engine.SocksSocketPath(sb.VsockSocket)
+			path := engine.DoorPath(sb.VsockSocket, engine.SocksPort)
 			conn, err := net.Dial("unix", path)
 			if (err == nil) != tt.want {
 				t.Fatalf("socks listener bound = %v, want %v", err == nil, tt.want)
@@ -189,7 +189,7 @@ func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
 		t.Fatalf("arm proxy: %v", armErr)
 	}
 	h.KeepLock(sb.ID, "tap-dz")
-	path := engine.EgressSocketPath(sb.VsockSocket)
+	path := engine.DoorPath(sb.VsockSocket, engine.EgressPort)
 
 	h.Disarm(sb.ID, false)
 	if _, err := net.Dial("unix", path); err == nil {
@@ -261,7 +261,7 @@ func TestALiveClaimsEgressFollowsTheView(t *testing.T) {
 	if err := h.Arm(t.Context(), sb); err != nil {
 		t.Fatalf("arm egress: %v", err)
 	}
-	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
+	client := outboundtest.EgressClient(engine.DoorPath(sb.VsockSocket, engine.EgressPort))
 	get := func() int {
 		t.Helper()
 		resp, err := client.Get(origin.URL + "/")
@@ -303,7 +303,7 @@ func TestArmAppliesTheClaimsLimitAndSetEgressLimitMovesIt(t *testing.T) {
 		t.Fatalf("arm egress: %v", err)
 	}
 	t.Cleanup(func() { h.Disarm(sb.ID, true) })
-	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
+	client := outboundtest.EgressClient(engine.DoorPath(sb.VsockSocket, engine.EgressPort))
 	fetch := func() time.Duration {
 		start := time.Now()
 		resp, err := client.Get(origin.URL + "/")
@@ -381,7 +381,7 @@ func TestAnArmNeverAppliesAnOlderCapThanASetterRead(t *testing.T) {
 	t.Cleanup(func() { h.Disarm(sb.ID, true) })
 
 	start := time.Now()
-	resp, err := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket)).Get(origin.URL + "/")
+	resp, err := outboundtest.EgressClient(engine.DoorPath(sb.VsockSocket, engine.EgressPort)).Get(origin.URL + "/")
 	if err != nil {
 		t.Fatalf("proxied GET: %v", err)
 	}

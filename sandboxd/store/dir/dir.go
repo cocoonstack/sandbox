@@ -310,19 +310,16 @@ func touchCurrentGeneration(final string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	current := filepath.Join(final, store.ExportGen(meta))
-	exportErr := os.Chtimes(current, now, now)
-	if errors.Is(exportErr, fs.ErrNotExist) {
-		return nil
+	for _, name := range []string{store.ExportGen(meta), digestName(meta)} {
+		err = os.Chtimes(filepath.Join(final, name), now, now)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 	}
-	if exportErr != nil {
-		return exportErr
-	}
-	digestErr := os.Chtimes(filepath.Join(final, digestName(meta)), now, now)
-	if errors.Is(digestErr, fs.ErrNotExist) {
-		return nil
-	}
-	return digestErr
+	return nil
 }
 
 func removeAgedEntry(final string, entry fs.DirEntry) error {

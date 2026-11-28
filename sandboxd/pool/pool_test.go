@@ -2114,7 +2114,25 @@ func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.Volum
 	return err
 }
 
-func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {
+func (f *fakeEngine) MountVolume(ctx context.Context, _, name, mount string, rw, live bool) error {
+	if live {
+		f.mu.Lock()
+		f.liveMountCalls = append(f.liveMountCalls, name)
+		hook, failName, ignoreCtx, failErr := f.liveMountHook, f.liveMountErrFor, f.liveMountIgnoresCtx, cmp.Or(f.liveMountErr, errors.New("mount failed"))
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		if err := ctx.Err(); err != nil && !ignoreCtx {
+			return err
+		}
+		if name == failName {
+			return failErr
+		}
+		f.mu.Lock()
+		f.liveMounts = append(f.liveMounts, name+":"+mount)
+		f.mu.Unlock()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	mode := ""
@@ -2124,26 +2142,6 @@ func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bo
 	f.volumeMounts = append(f.volumeMounts, types.Volume{Name: name, Mount: mount, Mode: mode})
 	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount)
 	return f.mountVolumeErr
-}
-
-func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
-	f.mu.Lock()
-	f.liveMountCalls = append(f.liveMountCalls, name)
-	hook, failName, ignoreCtx, failErr := f.liveMountHook, f.liveMountErrFor, f.liveMountIgnoresCtx, cmp.Or(f.liveMountErr, errors.New("mount failed"))
-	f.mu.Unlock()
-	if hook != nil {
-		hook()
-	}
-	if err := ctx.Err(); err != nil && !ignoreCtx {
-		return err
-	}
-	if name == failName {
-		return failErr
-	}
-	f.mu.Lock()
-	f.liveMounts = append(f.liveMounts, name+":"+mount)
-	f.mu.Unlock()
-	return f.MountVolume(ctx, sock, name, mount, rw)
 }
 
 func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) (bool, error) {

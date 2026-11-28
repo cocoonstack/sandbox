@@ -142,7 +142,7 @@ func TestARearmedClaimKeepsADoorItsGuestCanDial(t *testing.T) {
 			t.Fatalf("arm proxy: %v", err)
 		}
 	}
-	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)} {
+	for _, path := range []string{engine.DoorPath(sb.VsockSocket, engine.EgressPort), engine.DoorPath(sb.VsockSocket, engine.SocksPort)} {
 		conn, err := net.Dial("unix", path)
 		if err != nil {
 			t.Fatalf("dial after the second arm: %v", err)
@@ -166,7 +166,7 @@ func TestARearmWithNoPolicyLeftClosesTheDoor(t *testing.T) {
 	if route := h.Route(sb); route != types.NetRouteNone {
 		t.Errorf("route %q, want none", route)
 	}
-	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+	if _, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.EgressPort)); err == nil {
 		t.Error("the door still accepts with no policy left")
 	}
 }
@@ -211,7 +211,7 @@ func TestAClaimDisarmedWhileItsDoorsBindGetsNoDoors(t *testing.T) {
 				t.Fatalf("arm proxy: %v", err)
 			}
 
-			for _, path := range []string{engine.BootSocketPath(sb.VsockSocket), engine.EgressSocketPath(sb.VsockSocket)} {
+			for _, path := range []string{engine.DoorPath(sb.VsockSocket, engine.BootPort), engine.DoorPath(sb.VsockSocket, engine.EgressPort)} {
 				if conn, err := net.Dial("unix", path); err == nil {
 					_ = conn.Close()
 					t.Errorf("%s accepts for a claim disarmed mid-arm", path)
@@ -247,7 +247,7 @@ func TestAReloadDuringAnArmSkipsTheReservedSlot(t *testing.T) {
 		t.Fatalf("arm proxy: %v", err)
 	}
 
-	if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err != nil {
+	if conn, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.EgressPort)); err != nil {
 		t.Errorf("dial after an arm a reload crossed: %v", err)
 	} else {
 		_ = conn.Close()
@@ -289,7 +289,7 @@ func armDialingDoor(t *testing.T, id string, pol *egress.Policy) (*Host, string)
 		t.Fatalf("arm egress: %v", err)
 	}
 	t.Cleanup(func() { h.Disarm(sb.ID, true) })
-	return h, engine.EgressSocketPath(sb.VsockSocket)
+	return h, engine.DoorPath(sb.VsockSocket, engine.EgressPort)
 }
 
 func waitHeld(t *testing.T, h *Host, id string, want int) {

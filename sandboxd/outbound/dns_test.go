@@ -45,7 +45,7 @@ func TestDNSDoorBindsOnlyWhenOptedIn(t *testing.T) {
 			if err := h.ArmProxy(t.Context(), sb); err != nil {
 				t.Fatalf("arm proxy: %v", err)
 			}
-			paths := []string{engine.DNSSocketPath(sb.VsockSocket), engine.DNSDatagramSocketPath(sb.VsockSocket)}
+			paths := []string{engine.DoorPath(sb.VsockSocket, engine.DNSPort), engine.DoorPath(sb.VsockSocket, engine.DNSGramPort)}
 			for _, path := range paths {
 				conn, err := net.Dial("unix", path)
 				if (err == nil) != tt.want {
@@ -234,7 +234,7 @@ func TestDNSDoorsHandATruncatedAnswerToEachTransport(t *testing.T) {
 		o.Nameservers = func() []string { return []string{upstream} }
 	})
 	sb := armDNS(t, h)
-	gram, err := net.Dial("unix", engine.DNSDatagramSocketPath(sb.VsockSocket))
+	gram, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.DNSGramPort))
 	if err != nil {
 		t.Fatalf("dial datagram door: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAPreboundDoorRefusesAGuestUntilTheClaimServesIt(t *testing.T) {
 	sb.VMName = "sbx-dns-1"
 	h.Prebind(t.Context(), sb)
 	prebound := h.prebound[sb.VMName].ln
-	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.DNSSocketPath(sb.VsockSocket), engine.DNSDatagramSocketPath(sb.VsockSocket)} {
+	for _, path := range []string{engine.DoorPath(sb.VsockSocket, engine.EgressPort), engine.DoorPath(sb.VsockSocket, engine.DNSPort), engine.DoorPath(sb.VsockSocket, engine.DNSGramPort)} {
 		conn, err := net.Dial("unix", path)
 		if err == nil {
 			_ = conn.Close()
@@ -616,7 +616,7 @@ func armDNS(t *testing.T, h *Host) *types.Sandbox {
 
 func dialDNS(t *testing.T, sb *types.Sandbox) net.Conn {
 	t.Helper()
-	conn, err := net.Dial("unix", engine.DNSSocketPath(sb.VsockSocket))
+	conn, err := net.Dial("unix", engine.DoorPath(sb.VsockSocket, engine.DNSPort))
 	if err != nil {
 		t.Fatalf("dial dns door: %v", err)
 	}
