@@ -83,6 +83,8 @@ type Host struct {
 	boots    map[string]*net.UnixListener
 	preboots map[string]*net.UnixListener
 	taps     map[string]string
+	bootQ    []queuedBoot
+	bootOnce sync.Once
 
 	// limitMu orders each read of a claim's cap with its apply, so an older read never lands last.
 	limitMu sync.Mutex
