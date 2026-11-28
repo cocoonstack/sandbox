@@ -20,7 +20,14 @@ const (
 	bootNoticeGap     = time.Second
 	bootNoticeMax     = 64
 	bootAck           = "\n"
+	bootServeEvery    = 100 * time.Millisecond
 )
+
+type queuedBoot struct {
+	ctx context.Context
+	sb  *types.Sandbox
+	ln  *net.UnixListener
+}
 
 func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListener, bind unixBinder) {
 	if sb.VsockSocket == "" {
@@ -43,7 +50,26 @@ func (h *Host) armBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListe
 		closeBoot(ln)
 		return
 	}
-	go h.serveBoot(context.WithoutCancel(ctx), sb, ln)
+	h.queueBoot(ctx, sb, ln)
+}
+
+func (h *Host) queueBoot(ctx context.Context, sb *types.Sandbox, ln *net.UnixListener) {
+	h.bootOnce.Do(func() { go h.serveQueuedBoots() })
+	h.mu.Lock()
+	h.bootQ = append(h.bootQ, queuedBoot{ctx: context.WithoutCancel(ctx), sb: sb, ln: ln})
+	h.mu.Unlock()
+}
+
+func (h *Host) serveQueuedBoots() {
+	for range time.Tick(bootServeEvery) {
+		h.mu.Lock()
+		q := h.bootQ
+		h.bootQ = nil
+		h.mu.Unlock()
+		for _, b := range q {
+			go h.serveBoot(b.ctx, b.sb, b.ln)
+		}
+	}
 }
 
 func (h *Host) takeBootLocked(sb *types.Sandbox) (ln, displaced *net.UnixListener) {
